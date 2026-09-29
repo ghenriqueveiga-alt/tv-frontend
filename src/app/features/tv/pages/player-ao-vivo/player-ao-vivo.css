@@ -35,21 +35,9 @@
   min-height: 0;
 }
 
-.tv-room:has(.tv-static) {
-  height: 100vh;
-  max-height: 100vh;
-  overflow: hidden;
-  padding-bottom: 0;
-}
-
-.tv-room:has(.tv-static) .tv-stage {
-  justify-content: center;
-}
-
-.tv-room:has(.tv-static) .tv-set {
-  margin-top: 1rem;
-  max-height: calc(100vh - 2rem);
-}
+/* sem sinal: chassi ocupa a janela com o mesmo espaco em cima e embaixo */
+.tv-room:has(.tv-static) { height:100vh; max-height:100vh; overflow:hidden; padding-bottom:0 }
+.tv-room:has(.tv-static) .tv-stage { height:100vh; justify-content:center; padding-top:1rem; padding-bottom:1rem }
 
 .tv-below {
   width: 100%;
@@ -116,14 +104,9 @@
   height: 100%;
 }
 
-.tv-room:has(.tv-static) .tv-set {
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  justify-items: stretch;
-  min-height: calc(100vh - 3rem);
-}
-
-.tv-room:has(.tv-static) .tv-screen,.tv-room:has(.tv-static) .tv-center{height:auto;min-height:clamp(340px,58vh,660px);overflow:hidden}
-.tv-room:has(.tv-static) .tv-screen{max-height:none}
+/* sem sinal: bezels iguais (linhas fixas do grid) e tela ocupando o miolo */
+.tv-room:has(.tv-static) .tv-set { grid-template-rows:1.75rem minmax(0,1fr) 1.75rem; margin-top:0 }
+.tv-room:has(.tv-static) .tv-screen { aspect-ratio:auto }
 @media(min-width:641px){.tv-room:not(:has(.tv-static)) .tv-screen{height:calc(100dvh - 16rem);min-height:440px;max-height:none;aspect-ratio:auto}}
 
 .tv-video {
@@ -603,22 +586,24 @@
 .qr-fixed-col::-webkit-scrollbar-track { background: transparent; }
 .qr-fixed-col::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.2); border-radius: 99px; }
 
+/* 2.25vw = (gutter do .tv-stage 17.5vw - 13vw da coluna) / 2
+   centraliza o card no vão entre a borda da tela e a borda do player */
 .qr-fixed-left {
-  left: 1.5vw;
-  width: 15vw;
-  min-width: 140px;
+  left: 2.25vw;
+  width: 13vw;
+  min-width: 120px;
 }
 
 .qr-fixed-right {
-  right: 1.5vw;
-  width: 15vw;
-  min-width: 140px;
+  right: 2.25vw;
+  width: 13vw;
+  min-width: 120px;
 }
 
 .qr-fixed-col .crypto-card {
   padding: 0;
   gap: 0;
-  flex: 1;
+  flex: 0 1 auto;
   min-height: 0;
   max-height: none;
   width: 100%;
@@ -627,7 +612,8 @@
 .qr-fixed-col .crypto-qr-placeholder {
   width: 100%;
   aspect-ratio: 1;
-  flex: 1;
+  flex: 0 1 auto;
+  height: auto;
   min-height: 0;
   border-radius: 0;
   border: none;
@@ -692,6 +678,9 @@
   .tv-set { order: 3; }
   .tv-below { order: 5; }
 }
+
+/* sem sinal: QR no fluxo empurraria a TV para fora da janela */
+@media (max-width: 900px) { .tv-room:has(.tv-static) .qr-fixed-col { display:none } }
 
 .crypto-card {
   background: rgba(17, 24, 39, 0.85);

@@ -138,17 +138,24 @@ export class LinhaVermelhaService implements OnDestroy {
     this._pushServerState();
   }
 
+  /** A grade registra a página exibida; o player (e outras abas/dispositivos) seguem. */
   acompanharPagina(pagina: number): void {
+    if (this.pagina() === pagina) return;
     this.pagina.set(pagina);
+    this._pushServerState();
   }
 
   limpar(): void {
+    // Limpa a posição manual da linha, mas MANTÉM a página: a página é a da
+    // grade e não tem a ver com a linha manual (zerá-la deixava o player na 0).
+    const pagina = this.pagina();
     this.slot.set(null);
-    this.pagina.set(0);
+    this.pagina.set(pagina);
     this.diaIdx.set(null);
     this.desde.set(0);
-    this.mudanca$.next({ slot: null, pagina: 0, diaIdx: null });
-    try { localStorage.removeItem(this._chave()); } catch { }
+    this.mudanca$.next({ slot: null, pagina, diaIdx: null });
+    // Sem remover a chave do localStorage: o effect persiste o estado já limpo,
+    // e apagá-la aqui perdia a página quando nenhum sinal mudava.
     this._pushServerState();
   }
 

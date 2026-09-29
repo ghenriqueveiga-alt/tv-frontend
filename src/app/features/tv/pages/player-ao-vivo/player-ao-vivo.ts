@@ -30,13 +30,20 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
   readonly serverTime = inject(ServerTimeService);
   private readonly route = inject(ActivatedRoute);
   private _linhaSub?: Subscription;
+  /** Última página usada no cascata de deslocamentos (recalcula se mudar). */
+  private _lastPagina = -1;
 
   private nowDate(): Date {
     return this.serverTime.ready() ? this.serverTime.now() : new Date();
   }
 
+  /**
+   * Página vigente da grade. A grade grava aqui (acompanharPagina) e o player
+   * obedece — com ou sem linha manual posicionada. Antes só obedecia quando
+   * havia um slot manual, e aí o "ao vivo" ficava preso na página 0.
+   */
   private paginaAlvo(): number {
-    return this.linhaService.slot() ? this.linhaService.pagina() : 0;
+    return this.linhaService.pagina();
   }
 
   @ViewChild('videoPlayer') videoRef!: ElementRef<HTMLVideoElement>;
@@ -178,6 +185,8 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
   private _lastOverrideSlot: string | null = null;
   private _suppressAutoPlay = false;
   private _endedProgramId: number | null = null;
+  /** Episódio do qual o vídeo carregado veio (detecta troca de página na grade). */
+  private _videoEpId: number | null = null;
 
   readonly qrModalOpen = signal(false);
   readonly selectedQr = signal<{ name: string; color: string } | null>(null);
@@ -425,6 +434,13 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     }, 1000);
 
     this._linhaSub = this.linhaService.mudanca$.subscribe(() => {
+      // Página pode mudar por navegação na grade (outra aba/dispositivo):
+      // o cascata de deslocamentos precisa ser recalculado para a nova página.
+      const pag = this.paginaAlvo();
+      if (pag !== this._lastPagina) {
+        this._lastPagina = pag;
+        if (this.allEpisodiosMap.size > 0) this.computeSlipCascade(pag);
+      }
       this.updateCurrentBloco();
     });
 
@@ -532,6 +548,7 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
             }
 
             this.computeSlipCascade(this.paginaAlvo());
+            this._lastPagina = this.paginaAlvo();
             this.loading.set(false);
             this.updateCurrentBloco();
           },
@@ -611,7 +628,14 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     this._lastOverrideSlot = overrideSlot ?? null;
 
     const sameBloco = this.currentBloco()?.aId === bloco.aId && this.currentBloco()?.aHorario === bloco.aHorario;
-    if (sameBloco && this.videoUrl() && prevSlot === overrideSlot) {
+
+    // Mudou a página na grade? O episódio-alvo deste bloco muda e o vídeo que
+    // está tocando tem que ser trocado. Sem isso, todos os guards abaixo
+    // segurariam o episódio antigo até o bloco virar.
+    const epAlvo = sameBloco ? this.episodioAlvo(bloco, dia) : null;
+    const epMudou = !!epAlvo && this._videoEpId !== null && epAlvo.aId !== this._videoEpId;
+
+    if (sameBloco && this.videoUrl() && prevSlot === overrideSlot && !epMudou) {
       if (this.initialSeekOffset > 0) {
         const video = this.videoRef?.nativeElement;
         if (video) {
@@ -639,18 +663,8 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     const blocoTotalSeconds = bh * 3600 + bm * 60;
     const currentTotalSeconds = h * 3600 + m * 60 + s;
     const segundosNoBloco = this.linhaService.segundosDentroBloco();
-    const epLive = this.episodioPagina0(bloco, diaIdxForLive);
-    if (epLive) {
-      this.currentEpisodio.set(epLive);
-    } else {
-      const eps = bloco.aPrograma ? this.allEpisodiosMap.get(bloco.aPrograma.aId) : null;
-      if (eps && eps.length > 0) {
-        const epIdx = this.getEpisodeIndex(bloco, dia);
-        this.currentEpisodio.set(eps[epIdx % eps.length]);
-      } else {
-        this.currentEpisodio.set(null);
-      }
-    }
+    const epLive = this.episodioAlvo(bloco, dia);
+    this.currentEpisodio.set(epLive);
     const topFree = this.getTopFreeSeconds();
 
     const ep = this.currentEpisodio();
@@ -704,7 +718,7 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
 
     this.isReprise.set(!!bloco.aTipoBlocoDesc?.includes('Rep'));
 
-    if (sameBloco && this.videoUrl()) {
+    if (sameBloco && this.videoUrl() && !epMudou) {
       if (this.videoEnded()) return;
       const video = this.videoRef?.nativeElement;
       if (video) {
@@ -716,7 +730,7 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     }
 
     const sameProgram = this.currentBloco()?.aPrograma?.aId === bloco.aPrograma?.aId;
-    if (sameProgram && this.videoUrl() && slotIdx > 0) {
+    if (sameProgram && this.videoUrl() && slotIdx > 0 && !epMudou) {
       const video = this.videoRef?.nativeElement;
       if (video) {
         video.currentTime = this.seekSeconds();
@@ -727,9 +741,22 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     }
 
     if (bloco.aPrograma) {
-      if (this._endedProgramId === bloco.aPrograma.aId) return;
+      if (this._endedProgramId === bloco.aPrograma.aId && !epMudou) return;
       this.loadVideo(bloco.aPrograma.aId, dia);
     }
+  }
+
+  /**
+   * Episódio que este bloco deve exibir na página vigente: o da grade
+   * (episodioPagina0) com o fallback do índice por dia, igual ao cálculo
+   * que alimenta o texto na tela.
+   */
+  private episodioAlvo(bloco: BlocoOutput, dia: string): EpisodioInfo | null {
+    const ep = this.episodioPagina0(bloco, this.dias.indexOf(dia));
+    if (ep) return ep;
+    const eps = bloco.aPrograma ? this.allEpisodiosMap.get(bloco.aPrograma.aId) : null;
+    if (eps && eps.length > 0) return eps[this.getEpisodeIndex(bloco, dia) % eps.length];
+    return null;
   }
 
   private loadProgramaDetalhe(programaId: number): void {
@@ -770,6 +797,7 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     }
     if (!ep) return;
 
+    this._videoEpId = ep.aId;
     this.videoUrl.set(null);
 
     this.playerService.getEpisodio(ep.aId).subscribe({
@@ -777,6 +805,9 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
         if (fullEp.aArquivo) {
           this._suppressAutoPlay = false;
           this._endedProgramId = null;
+          // Trocou de episódio/página: o novo vídeo tem que tocar mesmo que o
+          // anterior tivesse terminado (onVideoLoaded pausa se videoEnded).
+          this.videoEnded.set(false);
           this.videoUrl.set(this.playerService.streamUrl(fullEp.aArquivo.aId));
         }
       },

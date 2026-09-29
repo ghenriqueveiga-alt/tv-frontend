@@ -3,12 +3,23 @@
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 99px; }
 
+/* Layout de altura cheia: header + filtros + paginação ocupam o topo e a grade
+   recebe o resto (flex). Antes o bloco de cima media 196 px mas o container da
+   grade era 100vh - 160 px: sobravam 36 px de scroll na janela e o header subia. */
+.grade-root { height: 100vh; display: flex; flex-direction: column; }
+.grade-scroll { flex: 1; min-height: 180px; }
+
+/* Header grudado no topo (rede de segurança caso a janela role, ex.: tela curta):
+   o conteúdo passa por baixo dele. z-index 40 = acima da grade (.now-line 10)
+   e abaixo do modal (50). */
+.grade-header { position: sticky; top: 0; z-index: 40; }
+
 .grid-cell {
   background: #fff; border: 1px solid #e2e8f0; border-radius: 12px;
   padding: 6px; display: flex; flex-direction: column; gap: 6px; min-height: 44px;
   position: relative; min-width: 0;
 }
-.bloco-card { position: relative; border-radius: 8px; cursor: pointer; background: #fff; border: 1px solid #e2e8f0; height: 104px; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; min-width: 0; }
+.bloco-card { position: relative; border-radius: 8px; cursor: pointer; background: #fff; border: 1px solid #e2e8f0; height: 80px; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; min-width: 0; }
 .bloco-card:hover { border-color: #94a3b8; }
 .bloco-accent-bar { position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 99px; }
 .bloco-accent-bar-right { display: none; }
@@ -22,9 +33,19 @@
 .tempo-livre span:first-child { font-size: 8px; color: #94a3b8; text-transform: uppercase; letter-spacing: .08em; }
 .tempo-livre span:last-child { font-size: 10px; color: #64748b; font-family: ui-monospace, monospace; }
 
-.filter-tab { padding: 6px 14px; border-radius: 99px; font-size: 12px; font-weight: 500; white-space: nowrap; cursor: pointer; border: 1px solid #e2e8f0; background: #fff; color: #475569; }
+.filter-tab, .tipo-btn { padding: 6px 14px; border-radius: 99px; font-size: 12px; cursor: pointer; border: 1px solid #e2e8f0; background: #fff; }
+.filter-tab { font-weight: 500; white-space: nowrap; color: #475569; }
 .filter-tab.active { background: #0f172a; color: #fff; border-color: #0f172a; }
 .filter-tab.inactive:hover { border-color: #94a3b8; }
+
+/* ── Barra de páginas: setas pretas nas pontas, lista exatamente entre elas ── */
+.pag-barra { display: flex; align-items: center; gap: 8px; padding: 8px 24px; }
+.pag-tag { font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: .1em; color: #94a3b8; margin-right: 4px; flex-shrink: 0; }
+.pag-scroll { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; padding: 5px 0; scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; scroll-behavior: smooth; }
+.pag-scroll::-webkit-scrollbar { height: 6px; }
+.pag-seta { flex: 0 0 auto; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border-radius: 999px; border: 1px solid #cbd5e1; background: #0f172a; color: #fff; font-size: 15px; line-height: 1; cursor: pointer; box-shadow: 0 2px 6px rgba(15,23,42,.25); transition: background .15s ease, opacity .15s ease; }
+.pag-seta:hover { background: #1e293b; }
+.pag-seta.off { opacity: .3; cursor: default; pointer-events: none; }
 
 .day-header { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 4px; text-align: center; }
 .day-header.today { border-color: #0f172a; }
@@ -52,12 +73,12 @@
 .search-dropdown { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
 .search-dropdown-item { padding: 8px 12px; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
 .search-dropdown-item:hover { background: #f8fafc; }
-.tipo-btn { padding: 6px 14px; border-radius: 99px; font-size: 12px; cursor: pointer; border: 1px solid #e2e8f0; background: #fff; }
 .tipo-btn.active { background: #0f172a; color: #fff; border-color: #0f172a; }
-.btn-primary { padding: 8px 18px; border-radius: 99px; font-size: 12px; font-weight: 600; cursor: pointer; background: #0f172a; color: #fff; border: none; }
+.btn-primary, .btn-secondary, .btn-danger { padding: 8px 18px; border-radius: 99px; font-size: 12px; cursor: pointer; }
+.btn-primary { font-weight: 600; background: #0f172a; color: #fff; border: none; }
 .btn-primary:disabled { opacity: .4; }
-.btn-secondary { padding: 8px 18px; border-radius: 99px; font-size: 12px; cursor: pointer; background: #fff; border: 1px solid #e2e8f0; }
-.btn-danger { padding: 8px 18px; border-radius: 99px; font-size: 12px; cursor: pointer; background: #dc2626; color: #fff; border: none; }
+.btn-secondary { background: #fff; border: 1px solid #e2e8f0; }
+.btn-danger { background: #dc2626; color: #fff; border: none; }
 .now-line { position: absolute; left: 0; right: 0; height: 2px; z-index: 10; pointer-events: none; background: #ef4444; }
 .detail-info-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; }
 .ep-item { padding: 6px 12px; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 8px; border-radius: 8px; }
@@ -67,20 +88,3 @@
 @keyframes fadeIn { from{opacity:0} to{opacity:1} }
 .ep-placeholder { background: #f1f5f9; border: 1px solid #e2e8f0; }
 .reset-now-btn { display: inline-flex; align-items: center; gap: .375rem; padding: 5px 12px; border-radius: 99px; font-size: 11px; cursor: pointer; background: #fff; border: 1px solid #e2e8f0; color: #475569; margin-left: auto; }
-
-/* ── QR codes no header (tema claro da grade, tamanho padrão) ── */
-.grade-qr-row { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; }
-.grade-qr-card { display: flex; flex-direction: column; align-items: center; gap: 3px; width: 56px; padding: 5px 4px 6px; border-radius: 10px; cursor: pointer; background: #fff; border: 1px solid #e2e8f0; border-top: 2px solid var(--coin-color, #888); }
-.grade-qr-card:hover { border-color: #94a3b8; transform: translateY(-1px); }
-.grade-qr-name { font-size: 8px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #475569; line-height: 1; white-space: nowrap; }
-.grade-qr-box { width: 32px; aspect-ratio: 1; border-radius: 4px; overflow: hidden; border: 1px solid #e2e8f0; }
-.grade-qr-svg, .crypto-qr-svg { width: 100%; height: 100%; display: block; }
-
-/* ── QR Modal (mesmo do Ao Vivo) ── */
-.qr-modal-backdrop { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.75); backdrop-filter: blur(6px); }
-.qr-modal-panel { position: relative; background: linear-gradient(180deg, rgba(30,41,59,.98), rgba(15,23,42,.98)); border: 1px solid rgba(148,163,184,.15); border-radius: 1rem; padding: 2rem 1.5rem 1.5rem; min-width: 320px; max-width: 90vw; display: flex; flex-direction: column; align-items: center; box-shadow: 0 25px 50px rgba(0,0,0,.5); }
-.qr-modal-close { position: absolute; top: .5rem; right: .5rem; width: 2rem; height: 2rem; display: flex; align-items: center; justify-content: center; border-radius: .5rem; background: rgba(255,255,255,.08); color: #e5e7eb; font-size: 1rem; line-height: 1; cursor: pointer; border: 1px solid rgba(255,255,255,.1); }
-.qr-modal-close:hover { background: rgba(255,255,255,.15); }
-.qr-modal-coin { font-size: 1.1rem; font-weight: 800; letter-spacing: .05em; margin-bottom: 1rem; }
-.qr-modal-qr { width: 280px; height: 280px; max-width: 70vw; max-height: 70vw; background: #fff; border-radius: .75rem; overflow: hidden; cursor: pointer; border: 1px solid #374151; }
-.qr-modal-hint { font-size: .7rem; color: #9ca3af; margin-top: .75rem; }

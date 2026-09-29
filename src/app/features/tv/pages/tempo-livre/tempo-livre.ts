@@ -1,4 +1,4 @@
-import { Component, signal, inject, OnInit } from '@angular/core';
+import { Component, signal, inject, OnInit, ViewChild, ElementRef } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { TvService, BlocoOutput } from '../../services/tv.service';
 
@@ -43,6 +43,7 @@ export class TempoLivre implements OnInit {
   readonly currentPage = signal(0);
   readonly totalPages = signal(1);
   readonly pageLabels: string[] = [];
+  @ViewChild('pagScroll') private pagScroll?: ElementRef<HTMLDivElement>;
 
   readonly dias = ['Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado', 'Domingo'];
   readonly EPISODES_PER_PAGE = 5;
@@ -162,6 +163,9 @@ export class TempoLivre implements OnInit {
           this.pageLabels.push(`Página ${p + 1}`);
         }
         this.loading.set(false);
+        // A barra de páginas só passa a existir depois do @if: espera um tick
+        // para o ViewChild resolver e então centraliza o botão da página atual.
+        setTimeout(() => this.focarBotaoPagina(this.currentPage()), 0);
       },
       error: () => {
         this.loading.set(false);
@@ -252,6 +256,7 @@ export class TempoLivre implements OnInit {
   goToPage(page: number): void {
     if (page < 0 || page >= this.totalPages()) return;
     this.currentPage.set(page);
+    this.focarBotaoPagina(page);
   }
 
   nextPage(): void {
@@ -260,6 +265,25 @@ export class TempoLivre implements OnInit {
 
   prevPage(): void {
     this.goToPage(this.currentPage() - 1);
+  }
+
+  /** Rolagem garantida: em aba oculta o Chrome descarta a animação suave. */
+  private rolarPara(el: HTMLElement, left: number): void {
+    el.scrollTo({
+      left: Math.max(0, Math.round(left)),
+      behavior: document.visibilityState === 'visible' ? 'smooth' : 'instant',
+    });
+  }
+
+  /** Centraliza o botão da página atual na barra, para a lista acompanhar a página. */
+  private focarBotaoPagina(page: number): void {
+    const el = this.pagScroll?.nativeElement;
+    if (!el) return;
+    const alvo = el.querySelector<HTMLElement>(`[data-pag="${page}"]`);
+    if (!alvo) return;
+    const barra = el.getBoundingClientRect();
+    const botao = alvo.getBoundingClientRect();
+    this.rolarPara(el, el.scrollLeft + (botao.left - barra.left) - (barra.width - botao.width) / 2);
   }
 
   formatSec(totalSec: number): string {

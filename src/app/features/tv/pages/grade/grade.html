@@ -1,8 +1,8 @@
-<div class="min-h-screen" style="background: #f8fafc;">
+<div class="min-h-screen grade-root" style="background: #f8fafc;">
 
   <!-- Header -->
   <div style="background: #fff; border-bottom: 1px solid #e2e8f0;"
-       class="px-6 py-4 flex items-center gap-4">
+       class="grade-header px-6 py-4 flex items-center gap-4">
     <div class="flex items-center gap-3">
       <div style="background: #0f172a;"
            class="w-9 h-9 rounded-xl flex items-center justify-center">
@@ -28,18 +28,8 @@
         </button>
       </div>
     </div>
-    <div class="flex-1 flex justify-center">
-      <div class="grade-qr-row">
-        @for (c of qrCoins; track c.name) {
-          <div class="grade-qr-card" [style.--coin-color]="c.color" (click)="openQrModal(c.name, c.color)" [title]="c.name">
-            <span class="grade-qr-name">{{ c.name }}</span>
-            <div class="grade-qr-box">
-              <svg viewBox="0 0 100 100" class="grade-qr-svg"><rect width="100" height="100" fill="#fff" rx="4"/><text x="50" y="54" text-anchor="middle" font-size="11" fill="#000" font-family="monospace">QR CODE</text></svg>
-            </div>
-          </div>
-        }
-      </div>
-    </div>
+    <!-- Espaçador: mantém os links do fim do header encostados à direita -->
+    <div class="flex-1"></div>
     <div class="flex items-center gap-3">
       <a routerLink="/tv/ao-vivo"
          class="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-all"
@@ -59,62 +49,37 @@
     </div>
   </div>
 
-  <!-- Grade Filter Tabs -->
-  @if (grades().length > 0) {
-    <div style="background: #fff; border-bottom: 1px solid #e2e8f0;"
-         class="px-6 py-2.5 flex items-center gap-2 overflow-x-auto">
-      <span class="text-[10px] font-medium uppercase tracking-widest mr-1 shrink-0" style="color: #94a3b8;">Filtrar</span>
-      <button
-        (click)="filterByGrade(null)"
-        class="filter-tab"
-        [class.active]="selectedGradeId() === null"
-        [class.inactive]="selectedGradeId() !== null">
-        Todas
-      </button>
-      @for (grade of grades(); track grade.aId) {
-        <button
-          (click)="filterByGrade(grade.aId)"
-          class="filter-tab"
-          [class.active]="selectedGradeId() === grade.aId"
-          [class.inactive]="selectedGradeId() !== grade.aId">
-          {{ grade.aNome }}
-          @if (grade.aGradeAtiva) {
-            <span class="ml-1.5 inline-block w-1.5 h-1.5 rounded-full bg-green-400"></span>
-          }
-        </button>
-      }
-    </div>
-  }
-
   <!-- Pagination Tabs -->
   @if (totalPages() > 1) {
-    <div style="background: #fff; border-bottom: 1px solid #e2e8f0;"
-         class="px-6 py-2 flex items-center gap-2 overflow-x-auto">
-      <span class="text-[10px] font-medium uppercase tracking-widest mr-1 shrink-0" style="color: #94a3b8;">Episodios</span>
+    <div style="background: #fff; border-bottom: 1px solid #e2e8f0;" class="pag-barra">
+      <span class="pag-tag">Episodios</span>
       <button
+        class="pag-seta"
         (click)="prevPage()"
-        [disabled]="currentPage() === 0"
-        class="filter-tab"
-        [class.inactive]="currentPage() > 0"
-        [style.opacity]="currentPage() === 0 ? 0.3 : 1">
-        &lsaquo;
+        [class.off]="currentPage() === 0"
+        title="Página anterior"
+        aria-label="Página anterior">
+        &larr;
       </button>
-      @for (label of pageLabels; track label; let i = $index) {
-        <button
-          (click)="goToPage(i)"
-          class="filter-tab"
-          [class.active]="currentPage() === i"
-          [class.inactive]="currentPage() !== i">
-          {{ label }}
-        </button>
-      }
+      <div class="pag-scroll" #pagScroll>
+        @for (label of pageLabels; track label; let i = $index) {
+          <button
+            (click)="goToPage(i)"
+            class="filter-tab"
+            [attr.data-pag]="i"
+            [class.active]="currentPage() === i"
+            [class.inactive]="currentPage() !== i">
+            {{ label }}
+          </button>
+        }
+      </div>
       <button
+        class="pag-seta"
         (click)="nextPage()"
-        [disabled]="currentPage() >= totalPages() - 1"
-        class="filter-tab"
-        [class.inactive]="currentPage() < totalPages() - 1"
-        [style.opacity]="currentPage() >= totalPages() - 1 ? 0.3 : 1">
-        &rsaquo;
+        [class.off]="currentPage() >= totalPages() - 1"
+        title="Próxima página"
+        aria-label="Próxima página">
+        &rarr;
       </button>
     </div>
   }
@@ -151,7 +116,7 @@
       </div>
     </div>
   } @else {
-    <div class="p-4 overflow-x-auto grade-scroll" style="max-height: calc(100vh - 160px); overflow-y: auto;">
+    <div class="p-4 overflow-x-auto grade-scroll" style="overflow-y: auto;">
       <div class="min-w-[960px] relative">
 
         <!-- Day Headers -->
@@ -257,10 +222,10 @@
                         </div>
                       }
                       </div>
-                      <div class="tempo-livre">
-                    <span>Livre</span>
-                    <span class="font-mono">{{ getTempoLivreBaixo(bloco, dia, horario) }}</span>
-                  </div>
+                    </div>
+                    <div class="tempo-livre">
+                      <span>Livre</span>
+                      <span class="font-mono">{{ getTempoLivreBaixo(bloco, dia, horario) }}</span>
                     </div>
                 }
               </div>
@@ -475,19 +440,4 @@
     </div>
   }
 
-  <!-- ── QR Modal (mesmo do Ao Vivo) ── -->
-  @if (qrModalOpen()) {
-    <div class="qr-modal-backdrop">
-      <div class="qr-modal-panel">
-        <button class="qr-modal-close" (click)="closeQrModal()" aria-label="Fechar">✕</button>
-        @if (selectedQr(); as qr) {
-          <p class="qr-modal-coin" [style.color]="qr.color">{{ qr.name }}</p>
-          <div class="qr-modal-qr" (click)="closeQrModal()" title="Escanear para fechar">
-            <svg viewBox="0 0 100 100" class="crypto-qr-svg"><rect width="100" height="100" fill="#fff" rx="4"/><text x="50" y="54" text-anchor="middle" font-size="11" fill="#000" font-family="monospace">QR CODE</text></svg>
-          </div>
-          <p class="qr-modal-hint">Clique no QR para simular escaneamento e fechar</p>
-        }
-      </div>
-    </div>
-  }
 </div>

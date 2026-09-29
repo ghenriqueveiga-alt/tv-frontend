@@ -29,31 +29,35 @@
 
   <!-- Pagination Tabs -->
   @if (totalPages() > 1) {
-    <div style="background: rgba(15,23,42,0.35); border-bottom: 1px solid rgba(148,163,184,0.04);"
-         class="px-6 py-2 flex items-center gap-2 overflow-x-auto">
-      <span class="text-[10px] text-gray-600 font-semibold uppercase tracking-widest mr-1 shrink-0">Episodios</span>
+    <div style="background: rgba(15,23,42,0.35); border-bottom: 1px solid rgba(148,163,184,0.04);" class="pag-barra">
+      <span class="pag-tag">Episodios</span>
       <button
+        class="pag-seta"
         (click)="prevPage()"
-        [disabled]="currentPage() === 0"
-        class="filter-tab"
-        [style.opacity]="currentPage() === 0 ? 0.3 : 1">
-        &lsaquo;
+        [class.off]="currentPage() === 0"
+        title="Página anterior"
+        aria-label="Página anterior">
+        &larr;
       </button>
-      @for (label of pageLabels; track label; let i = $index) {
-        <button
-          (click)="goToPage(i)"
-          class="filter-tab"
-          [class.active]="currentPage() === i"
-          [class.inactive]="currentPage() !== i">
-          {{ label }}
-        </button>
-      }
+      <div class="pag-scroll" #pagScroll>
+        @for (label of pageLabels; track label; let i = $index) {
+          <button
+            (click)="goToPage(i)"
+            class="filter-tab"
+            [attr.data-pag]="i"
+            [class.active]="currentPage() === i"
+            [class.inactive]="currentPage() !== i">
+            {{ label }}
+          </button>
+        }
+      </div>
       <button
+        class="pag-seta"
         (click)="nextPage()"
-        [disabled]="currentPage() >= totalPages() - 1"
-        class="filter-tab"
-        [style.opacity]="currentPage() >= totalPages() - 1 ? 0.3 : 1">
-        &rsaquo;
+        [class.off]="currentPage() >= totalPages() - 1"
+        title="Próxima página"
+        aria-label="Próxima página">
+        &rarr;
       </button>
     </div>
   }

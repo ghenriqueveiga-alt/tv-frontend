@@ -1,4 +1,4 @@
-import { Component, signal, computed, inject, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
+import { Component, signal, computed, inject, OnInit, OnDestroy, ChangeDetectorRef, ViewChild, ElementRef } from '@angular/core';
 import { Router, RouterLink, ActivatedRoute } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
@@ -334,26 +334,6 @@ export class Grade implements OnInit, OnDestroy {
   readonly detailHorario = signal('');
   readonly detailDeleting = signal(false);
 
-  readonly qrCoins = [
-    { name: 'Bitcoin', color: '#F7931A' },
-    { name: 'Ethereum', color: '#627EEA' },
-    { name: 'Binance', color: '#F0B90B' },
-    { name: 'Solana', color: '#9945FF' },
-    { name: 'Litecoin', color: '#BFBBBB' },
-    { name: 'Monero', color: '#FF6600' },
-  ];
-  readonly qrModalOpen = signal(false);
-  readonly selectedQr = signal<{ name: string; color: string } | null>(null);
-
-  openQrModal(name: string, color: string): void {
-    this.selectedQr.set({ name, color });
-    this.qrModalOpen.set(true);
-  }
-
-  closeQrModal(): void {
-    this.qrModalOpen.set(false);
-  }
-
   readonly currentPage = signal(0);
   readonly EPISODES_PER_PAGE = 5;
 
@@ -368,6 +348,7 @@ export class Grade implements OnInit, OnDestroy {
   }
   readonly totalPages = signal(1);
   readonly pageLabels: string[] = [];
+  @ViewChild('pagScroll') private pagScroll?: ElementRef<HTMLDivElement>;
   private static readonly ROLLOVER_KEY = 'grade-last-rollover';
 
   readonly diasCodigo: Record<string, string> = {
@@ -385,7 +366,9 @@ export class Grade implements OnInit, OnDestroy {
   ngOnInit(): void {
     const qp = this.route.snapshot.queryParamMap.get('page');
     const parsed = qp !== null ? parseInt(qp, 10) : NaN;
-    this.pendingPage = !isNaN(parsed) && parsed > 0 ? parsed : 0;
+    // Sem ?page explícito, a grade abre na página da linha vermelha (a mesma
+    // que o "ao vivo" está exibindo) para os dois nunca divergirem.
+    this.pendingPage = !isNaN(parsed) && parsed > 0 ? parsed : this.linhaService.pagina();
     this._timerInterval = setInterval(() => {
       this.currentTime.set(this.nowDate());
       this.maybeRolloverPage();
@@ -394,6 +377,13 @@ export class Grade implements OnInit, OnDestroy {
       const serviceSlot = this.linhaService.slot();
       if (this.nowLineOverride() !== null && this.nowLineOverride() !== serviceSlot) {
         this.nowLineOverride.set(null);
+      }
+      // Mudança vinda de fora (outra aba/dispositivo): a grade acompanha a
+      // página da linha para não divergir do "ao vivo". As trocas feitas por
+      // esta própria grade não emitem mudanca$, então não há ciclo.
+      const pag = this.linhaService.pagina();
+      if (this.totalPages() > 0 && pag >= 0 && pag < this.totalPages() && pag !== this.currentPage()) {
+        this.goToPage(pag);
       }
       setTimeout(() => this.cdr.detectChanges());
     });
@@ -465,6 +455,32 @@ export class Grade implements OnInit, OnDestroy {
     return n;
   }
 
+  /** Episódio exibido numa célula de horário "flat" (Cavaleiros 19:00,
+   *  DB 18:00, Avatar 11:00, Baki 21:00, Digimon 12:30, Medabots 11:30)
+   *  calculado para uma PÁGINA EXPLícITA. Espelha as fórmulas do
+   *  getEpisodioRaw (que usa this.currentPage()), porque o cascata de
+   *  deslocamentos precisa simular todas as páginas 0..currentPage. */
+  private episodioFlatParaPagina(bloco: BlocoOutput, diaIdx: number, pagina: number): EpisodioInfo | null {
+    if (this.isWeekendBloco(bloco)) return null;
+    let flat: EpisodioInfo[] = [];
+    let pidRef = -1;
+    if (this.isDigimon1230Horario(bloco)) { flat = this.getDigimonFlatEpisodes(); pidRef = 22; }
+    else if (this.isCavaleiros19Horario(bloco)) { flat = this.getCavaleirosFlatEpisodes(); pidRef = 58; }
+    else if (this.isDragonBall18Horario(bloco)) { flat = this.getDragonBallFlatEpisodes(); pidRef = 30; }
+    else if (this.isAvatar11Horario(bloco)) { flat = this.getAvatarFlatEpisodes(); pidRef = 7; }
+    else if (this.isBaki21Horario(bloco)) { flat = this.getBakiFlatEpisodes(); pidRef = 9; }
+    else if (this.isMedabots1130Horario(bloco)) { flat = this.getMedabotsFlatEpisodes(); pidRef = 47; }
+    else return null;
+    if (flat.length === 0) return null;
+    const diasQ = pidRef === 9
+      ? (this.diasProgramaMap.get(9) ?? this.diasProgramaMap.get(10) ?? [])
+      : (this.diasProgramaMap.get(pidRef) ?? []);
+    const dayPos = diasQ.indexOf(diaIdx);
+    if (dayPos < 0) return null;
+    const idx = (((dayPos + pagina * this.EPISODES_PER_PAGE) % flat.length) + flat.length) % flat.length;
+    return flat[idx];
+  }
+
   private computeSlipCascade(): void {
     this.deslocamentos = [];
     const diasIndice = new Map(this.dias.map((d, i) => [d, i]));
@@ -489,16 +505,25 @@ export class Grade implements OnInit, OnDestroy {
           if (!cellBlocos) continue;
           for (const bloco of cellBlocos) {
             if (!bloco.aPrograma || bloco.aPrograma.aId === 35) continue;
-            if (this.isAnyFlatHorario(bloco)) continue;
-            const eps = this.allEpisodiosMap.get(bloco.aPrograma.aId);
-            const diasQ = this.diasProgramaMap.get(bloco.aPrograma.aId);
-            if (!eps || eps.length === 0 || !diasQ || diasQ.length === 0) continue;
-            const dayPos = diasQ.indexOf(d);
-            if (dayPos < 0) continue;
-            const slip = slipRun.get(bloco.aPrograma.aId) ?? 0;
-            const step = diasQ.length || this.EPISODES_PER_PAGE;
-            const idx = (((dayPos + p * step - slip) % eps.length) + eps.length) % eps.length;
-            const ep = eps[idx];
+            // Fim de semana nunca espalha. Horários flat de segunda a sexta
+            // espalham sim: o episódio deles vem da lista flat, já para a
+            // página p que está sendo simulada (senão o deslocamento dos
+            // programas ocupados por ele nunca seria registrado).
+            if (this.isWeekendBloco(bloco)) continue;
+            let ep: EpisodioInfo | null;
+            if (this.isAnyFlatHorario(bloco)) {
+              ep = this.episodioFlatParaPagina(bloco, d, p);
+            } else {
+              const eps = this.allEpisodiosMap.get(bloco.aPrograma.aId);
+              const diasQ = this.diasProgramaMap.get(bloco.aPrograma.aId);
+              if (!eps || eps.length === 0 || !diasQ || diasQ.length === 0) continue;
+              const dayPos = diasQ.indexOf(d);
+              if (dayPos < 0) continue;
+              const slip = slipRun.get(bloco.aPrograma.aId) ?? 0;
+              const step = diasQ.length || this.EPISODES_PER_PAGE;
+              const idx = (((dayPos + p * step - slip) % eps.length) + eps.length) % eps.length;
+              ep = eps[idx];
+            }
             if (!ep || !ep.aDuracao || this.parseDuracaoSec(ep.aDuracao) <= 30 * 60) continue;
             const need = Math.ceil(this.parseDuracaoSec(ep.aDuracao) / (30 * 60));
             for (let s = 1; s < need; s++) {
@@ -543,8 +568,10 @@ export class Grade implements OnInit, OnDestroy {
         if (!cellBlocos) continue;
         for (const bloco of cellBlocos) {
           if (bloco.aPrograma?.aId === 35) continue;
-          if (this.isAnyFlatHorario(bloco)) continue;
-          const ep = this.getEpisodioUncached(bloco);
+          if (this.isWeekendBloco(bloco)) continue;
+          const ep = this.isAnyFlatHorario(bloco)
+            ? this.episodioFlatParaPagina(bloco, d, this.currentPage())
+            : this.getEpisodioUncached(bloco);
           if (!ep || !ep.aDuracao) continue;
           if (this.parseDuracaoSec(ep.aDuracao) <= 30*60) continue;
           const slotsNeeded = Math.ceil(this.parseDuracaoSec(ep.aDuracao) / (30*60));
@@ -601,9 +628,16 @@ export class Grade implements OnInit, OnDestroy {
 
         for (const bloco of [...cellBlocos]) {
           if (bloco.aPrograma?.aId === 35) continue;
-          if (this.isAnyFlatHorario(bloco)) continue;
+          // Fim de semana nunca espalha (layout de 1 card por célula). Os
+          // horários "flat" de segunda a sexta (Cavaleiros 19:00, DB 18:00,
+          // Avatar 11:00, Baki 21:00, Digimon 12:30, Medabots 11:30) espalham
+          // sim: o episódio exibido ali vem da lista flat (getEpisodioRaw),
+          // então é ele que define a duração/quantidade de slots.
+          if (this.isWeekendBloco(bloco)) continue;
           if (bloco.aHorario?.substring(0, 5) !== t) continue;
-          const ep = this.getEpisodioUncached(bloco);
+          const ep = this.isAnyFlatHorario(bloco)
+            ? this.getEpisodioRaw(bloco, d)
+            : this.getEpisodioUncached(bloco);
           if (!ep || !ep.aDuracao) continue;
           const epSec = this.parseDuracaoSec(ep.aDuracao);
           if (epSec <= 30 * 60) continue;
@@ -753,6 +787,9 @@ export class Grade implements OnInit, OnDestroy {
         this.rebuildEpisodioCache();
         this.loading.set(false);
         this.maybeRolloverPage();
+        // A barra de páginas só passa a existir depois do @if: espera um tick
+        // para o ViewChild resolver e então centraliza o botão da página atual.
+        setTimeout(() => this.focarBotaoPagina(this.currentPage()), 0);
       },
       error: () => {
         this.loading.set(false);
@@ -760,19 +797,10 @@ export class Grade implements OnInit, OnDestroy {
     });
   }
 
-  filterByGrade(gradeId: number | null): void {
-    this.selectedGradeId.set(gradeId);
-    if (this.allEpisodiosMap.size > 0) {
-      this.computeBaseRemovedDias();
-      this.buildSameDayBlocosCache();
-      this.computeEffectiveSchedule();
-      this.rebuildEpisodioCache();
-    }
-  }
-
   goToPage(page: number): void {
     if (page < 0 || page >= this.totalPages()) return;
     this.currentPage.set(page);
+    this.focarBotaoPagina(page);
     this.linhaService.acompanharPagina(page);
     void this.router.navigate([], {
       relativeTo: this.route,
@@ -793,6 +821,26 @@ export class Grade implements OnInit, OnDestroy {
 
   prevPage(): void {
     this.goToPage(this.currentPage() - 1);
+  }
+
+  /** Rolagem garantida: em aba oculta o Chrome descarta a animação suave
+   *  e o scrollLeft ficaria onde estava (a lista "não obedecia"). */
+  private rolarPara(el: HTMLElement, left: number): void {
+    el.scrollTo({
+      left: Math.max(0, Math.round(left)),
+      behavior: document.visibilityState === 'visible' ? 'smooth' : 'instant',
+    });
+  }
+
+  /** Centraliza o botão da página atual na barra, para a lista acompanhar a página. */
+  private focarBotaoPagina(page: number): void {
+    const el = this.pagScroll?.nativeElement;
+    if (!el) return;
+    const alvo = el.querySelector<HTMLElement>(`[data-pag="${page}"]`);
+    if (!alvo) return;
+    const barra = el.getBoundingClientRect();
+    const botao = alvo.getBoundingClientRect();
+    this.rolarPara(el, el.scrollLeft + (botao.left - barra.left) - (barra.width - botao.width) / 2);
   }
 
   private maybeRolloverPage(): void {
@@ -1544,11 +1592,12 @@ export class Grade implements OnInit, OnDestroy {
       episodeSliceMin = epSec / 60;
     }
 
-    // Alturas medidas no layout (grid row 157px): top livre 0.07-0.25,
-    // episódio 0.282-0.774, livre base 0.774-0.955. Mantém fator visual fixo.
-    const TOP_T = 0.07, TOP_H = 0.181;
-    const EP_T = 0.282, EP_H = 0.492;
-    const BOT_T = 0.774, BOT_H = 0.181;
+    // Alturas medidas no layout (grid row 136px): top livre 0.052-0.162,
+    // episódio 0.206-0.794, livre base 0.838-0.949. Mantém fator visual fixo
+    // (as faixas vão das bordas do card, sem salto entre episódio e livre base).
+    const TOP_T = 0.052, TOP_H = 0.154;
+    const EP_T = 0.206, EP_H = 0.588;
+    const BOT_T = 0.794, BOT_H = 0.155;
 
     if (topFreeMin > 0 && elapsedSlotMin < topFreeMin) {
       return TOP_T + (elapsedSlotMin / topFreeMin) * TOP_H;
