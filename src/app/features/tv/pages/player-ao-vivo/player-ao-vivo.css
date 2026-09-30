@@ -408,7 +408,6 @@
   justify-content: center;
 }
 
-.slate-wait,
 .slate-next {
   border-color: rgba(148, 163, 184, 0.28);
 }
@@ -421,7 +420,6 @@
   color: #9ca3af;
 }
 
-.slate-wait .slate-kicker,
 .slate-next .slate-kicker {
   color: #e5e7eb;
 }

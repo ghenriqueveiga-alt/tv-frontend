@@ -120,51 +120,7 @@
 
         <div #playerWrap class="tv-screen select-none" (contextmenu)="$event.preventDefault()" (mousemove)="onFsMouseMove($event)" (mouseleave)="onFsMouseLeave()" (click)="onScreenClick()" [class.hide-cursor]="isFullscreen() && !showFsUi()">
 
-          @if (waitSeconds() > 0) {
-            <div class="free-countdown-overlay">
-              <div class="tv-scroll">
-                <span class="text-6xl block mb-3">⏳</span>
-                <p class="text-lg text-gray-300 mb-2">Episódio começa em</p>
-                <p class="text-4xl font-mono font-bold text-yellow-400">{{ formatTime(waitSeconds()) }}</p>
-                <div class="slate slate-wait">
-                  <p class="slate-kicker">A seguir</p>
-                  <p class="slate-title">{{ liveDisplayNome || 'Próximo programa' }} <span class="slate-hora">{{ currentBloco()?.aHorario?.substring(0, 5) }}</span></p>
-                  @if (currentEpisodio()) {
-                    <p class="slate-ep">
-                      @if (currentEpisodio()!.aTemporada) {
-                        <span class="font-mono font-bold">T{{ currentEpisodio()!.aTemporada!.toString().padStart(2, '0') }}</span>
-                      }
-                      @if (currentEpisodio()!.aNumero) {
-                        <span class="font-mono font-bold">E{{ currentEpisodio()!.aNumero!.toString().padStart(2, '0') }}</span>
-                      }
-                      @if (currentEpisodio()!.aTitulo) {
-                        <span class="ml-1">{{ currentEpisodio()!.aTitulo }}</span>
-                      }
-                    </p>
-                  }
-                  <p class="slate-sub"><span class="font-mono font-bold text-yellow-300">{{ formatTime(waitSeconds()) }}</span> para o episódio <span class="font-bold text-white">{{ currentEpisodio()?.aTitulo ?? liveDisplayNome }}</span> já vai começar</p>
-                </div>
-              </div>
-            </div>
-          } @else if (waitingForNext()) {
-            <div class="free-countdown-overlay">
-              <div class="tv-scroll">
-                <span class="text-5xl block mb-2">⏳</span>
-                <p class="text-sm text-gray-400 uppercase tracking-widest font-semibold">Tempo livre</p>
-                <p class="text-4xl font-mono font-bold text-yellow-400 my-1">{{ formatTime(freeCountdownSec) }}</p>
-                <p class="text-xs text-gray-500">até o fim do bloco</p>
-                <div class="slate slate-next">
-                  <p class="slate-kicker">Na sequência</p>
-                  @if (nextBloco?.aPrograma) {
-                    <p class="slate-title">{{ nextBloco!.aPrograma!.aNome }} <span class="slate-hora">{{ nextBloco!.aHorario?.substring(0, 5) }}</span></p>
-                  } @else {
-                    <p class="slate-title">Fim da grade de hoje</p>
-                  }
-                  <p class="slate-sub"><span class="font-mono font-bold text-yellow-300">{{ formatTime(freeCountdownSec) }}</span> para o próximo bloco <span class="font-bold text-white">{{ nextBloco?.aPrograma?.aNome ?? '' }}</span> irá começar</p>
-                </div>
-              </div>
-            </div>
-          } @else if (videoUrl()) {
+          @if (videoUrl()) {
             <video
               #videoPlayer
               [src]="videoUrl()"
@@ -173,28 +129,47 @@
               (play)="onPlayState(true)"
               (pause)="onPauseBlocked()"
               (ended)="onVideoEnded()"
+              (error)="onVideoError()"
               preload="auto"
               playsinline
               class="tv-video">
             </video>
-            @if (videoEnded()) {
-              <div class="free-countdown-overlay">
-                <div class="tv-scroll">
-                  <span class="text-5xl block mb-2">⏳</span>
-                  <p class="text-sm text-gray-400 uppercase tracking-widest font-semibold">Tempo livre</p>
-                  <p class="text-4xl font-mono font-bold text-yellow-400 my-1">{{ formatTime(freeCountdownSec) }}</p>
-                  <p class="text-xs text-gray-500">até o fim do bloco</p>
-                  <div class="slate slate-next">
-                    <p class="slate-kicker">Na sequência</p>
-                    @if (nextBloco?.aPrograma) {
-                      <p class="slate-title">{{ nextBloco!.aPrograma!.aNome }} <span class="slate-hora">{{ nextBloco!.aHorario?.substring(0, 5) }}</span></p>
-                    }
-                    <p class="slate-sub"><span class="font-mono font-bold text-yellow-300">{{ formatTime(freeCountdownSec) }}</span> para o próximo bloco <span class="font-bold text-white">{{ nextBloco?.aPrograma?.aNome ?? '' }}</span> irá começar</p>
-                  </div>
+          }
+
+          @if (freeGapActive) {
+            @let prox = blocoProximoSlate;
+            @let gap = freeGapSec;
+            <div class="free-countdown-overlay">
+              <div class="tv-scroll">
+                <span class="text-5xl block mb-2">⏳</span>
+                <p class="text-sm text-gray-400 uppercase tracking-widest font-semibold">Tempo livre</p>
+                <p class="text-4xl font-mono font-bold text-yellow-400 my-1">{{ formatTime(gap) }}</p>
+                <p class="text-xs text-gray-500">fim do bloco atual + início do próximo</p>
+                <div class="slate slate-next">
+                  <p class="slate-kicker">A seguir</p>
+                  @if (prox) {
+                    <p class="slate-title">{{ prox.aPrograma?.aNome }} <span class="slate-hora">{{ prox.aHorario?.substring(0, 5) }}</span></p>
+                  } @else {
+                    <p class="slate-title">Fim da grade de hoje</p>
+                  }
+                  @if (episodioProximoSlate; as ep) {
+                    <p class="slate-ep">
+                      @if (ep.aTemporada) {
+                        <span class="font-mono font-bold">T{{ ep.aTemporada.toString().padStart(2, '0') }}</span>
+                      }
+                      @if (ep.aNumero) {
+                        <span class="font-mono font-bold">E{{ ep.aNumero.toString().padStart(2, '0') }}</span>
+                      }
+                      @if (ep.aTitulo) {
+                        <span class="ml-1">{{ ep.aTitulo }}</span>
+                      }
+                    </p>
+                  }
+                  <p class="slate-sub"><span class="font-mono font-bold text-yellow-300">{{ formatTime(gap) }}</span> de intervalo antes de <span class="font-bold text-white">{{ prox?.aPrograma?.aNome ?? '' }}</span> começar</p>
                 </div>
               </div>
-            }
-          } @else {
+            </div>
+          } @else if (!videoUrl()) {
             <div class="tv-center">
               <span class="text-6xl block mb-3">🎬</span>
               <p class="text-gray-500">Carregando vídeo...</p>

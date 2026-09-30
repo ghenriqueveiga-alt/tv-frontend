@@ -32,6 +32,18 @@
 .tempo-livre { display: flex; align-items: center; justify-content: space-between; padding: 0 4px; }
 .tempo-livre span:first-child { font-size: 8px; color: #94a3b8; text-transform: uppercase; letter-spacing: .08em; }
 .tempo-livre span:last-child { font-size: 10px; color: #64748b; font-family: ui-monospace, monospace; }
+/* Quadrado de tempo livre clicável → modal de propaganda */
+.tempo-livre.livre-ativo { cursor: pointer; border-radius: 6px; transition: background .12s ease; }
+.tempo-livre.livre-ativo:hover { background: #eff6ff; box-shadow: inset 0 0 0 1px #bfdbfe; }
+
+/* Card de soma dos tempos livres entre duas linhas: é ele que abre o modal
+   do intervalo (quadrados cobertos por ele não abrem mais o modal próprio). */
+.gap-bloco { cursor: pointer; transition: background .12s ease, border-color .12s ease, color .12s ease; }
+.gap-bloco:hover { background: #eff6ff; border-color: #93c5fd; color: #2563eb; }
+
+/* 📢 das propagandas já salvas naquele espaço (quadrado "Livre" e card de soma):
+   vem com a quantidade; o tooltip lista nome + duração de cada uma. */
+.prop-marca { font-size: 9px; line-height: 1; color: #b45309; background: #fffbeb; border: 1px solid #fde68a; border-radius: 999px; padding: 1px 4px; white-space: nowrap; }
 
 .filter-tab, .tipo-btn { padding: 6px 14px; border-radius: 99px; font-size: 12px; cursor: pointer; border: 1px solid #e2e8f0; background: #fff; }
 .filter-tab { font-weight: 500; white-space: nowrap; color: #475569; }

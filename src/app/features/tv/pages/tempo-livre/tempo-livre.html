@@ -138,11 +138,20 @@
                 <td class="font-semibold">{{ r.programa }}</td>
                 <td>
                   <span class="font-mono text-[11px] text-blue-300">{{ epLabel(r.episodio) }}</span>
+                  @if (r.qtdEps > 1) {
+                    <span class="badge-multi">+{{ r.qtdEps - 1 }} eps</span>
+                  }
                   @if (r.episodio?.aTitulo) {
                     <span class="text-gray-400 text-[11px] ml-1">{{ r.episodio!.aTitulo }}</span>
                   }
                 </td>
-                <td class="font-mono">{{ formatDuracao(r.episodio?.aDuracao ?? null) }}</td>
+                <td class="font-mono">
+                  @if (r.qtdEps > 1) {
+                    {{ formatSec(r.duracaoSec) }}
+                  } @else {
+                    {{ formatDuracao(r.episodio?.aDuracao ?? null) }}
+                  }
+                </td>
                 <td class="font-mono text-yellow-200">{{ formatSec(r.topoSec) }}</td>
                 <td class="font-mono text-yellow-200">{{ formatSec(r.baixoSec) }}</td>
                 <td class="font-mono font-bold text-yellow-300">{{ formatSec(r.totalSec) }}</td>

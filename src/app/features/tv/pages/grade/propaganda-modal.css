@@ -1,0 +1,36 @@
+/* Estilos do modal de propaganda: cópia das regras que o painel usa e que
+   viviam no grade.css (escopo de componente do grade não alcança mais aqui).
+   O :host sem caixa evita que a tag vire um item de flex na grade. */
+:host { display: contents; }
+
+.modal-backdrop { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(15,23,42,.4); }
+.modal-panel { background: #fff; border-radius: 16px; width: 100%; max-width: 440px; margin: 16px; box-shadow: 0 20px 50px rgba(0,0,0,.15); }
+
+.badge { display: inline-flex; align-items: center; font-size: 10px; padding: 2px 8px; border-radius: 99px; font-weight: 500; background: #f1f5f9; color: #475569; }
+.badge-inedito { background: #e0f2fe; color: #0284c7; }
+.badge-especial { background: #fee2e2; color: #b91c1c; }
+
+.grade-input { width: 100%; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 12px; font-size: 13px; outline: none; }
+.grade-input:focus { border-color: #0f172a; }
+
+.tipo-btn { padding: 6px 14px; border-radius: 99px; font-size: 12px; cursor: pointer; border: 1px solid #e2e8f0; background: #fff; }
+.tipo-btn.active { background: #0f172a; color: #fff; border-color: #0f172a; }
+
+.search-dropdown { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
+.search-dropdown-item { padding: 8px 12px; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.search-dropdown-item:hover { background: #f8fafc; }
+
+.btn-primary, .btn-secondary { padding: 8px 18px; border-radius: 99px; font-size: 12px; cursor: pointer; }
+.btn-primary { font-weight: 600; background: #0f172a; color: #fff; border: none; }
+.btn-primary:disabled { opacity: .4; }
+.btn-secondary { background: #fff; border: 1px solid #e2e8f0; }
+
+.prop-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; }
+.prop-item-editando { border-color: #0f172a; background: #f8fafc; }
+.prop-ordem { width: 18px; height: 18px; border-radius: 999px; background: #f1f5f9; color: #64748b; font-size: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.prop-lado { font-size: 9px; text-transform: uppercase; letter-spacing: .06em; color: #64748b; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 4px; padding: 1px 4px; flex-shrink: 0; align-self: center; }
+.prop-lado-baixo { color: #0369a1; background: #f0f9ff; border-color: #bae6fd; }
+.prop-acao { width: 22px; height: 22px; border-radius: 6px; border: 1px solid #e2e8f0; background: #fff; color: #475569; font-size: 12px; line-height: 1; cursor: pointer; flex-shrink: 0; padding: 0; }
+.prop-acao:hover:not(:disabled) { background: #f1f5f9; border-color: #94a3b8; }
+.prop-acao:disabled { opacity: .35; cursor: default; }
+.prop-acao-perigo:hover:not(:disabled) { background: #fee2e2; border-color: #fca5a5; color: #b91c1c; }

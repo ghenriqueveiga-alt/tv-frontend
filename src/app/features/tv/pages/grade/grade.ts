@@ -1,11 +1,21 @@
-import { Component, signal, computed, inject, OnInit, OnDestroy, ChangeDetectorRef, ViewChild, ElementRef } from '@angular/core';
+import { Component, signal, computed, inject, OnInit, OnDestroy, ChangeDetectionStrategy, ChangeDetectorRef, ViewChild, ElementRef } from '@angular/core';
 import { Router, RouterLink, ActivatedRoute } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { TvService, GradeOutput, BlocoOutput, ProgramaOutput } from '../../services/tv.service';
+import { PropagandaService, PropagandaPosicaoCode } from '../../services/propaganda.service';
+import { PropagandaModal, PropagandaContexto } from './propaganda-modal';
 import { LinhaVermelhaService } from '../../services/linha-vermelha.service';
 import { ServerTimeService } from '../../../../core/services/server-time.service';
 import { environment } from '../../../../../environments/environment';
+import {
+  duracaoPacote,
+  inicioSlot,
+  limparCacheMultiEp,
+  offsetSlot,
+  pacoteBloco,
+  sufixoEpisodio,
+} from '../../utils/multi-episodio';
 
 interface EpisodioInfo {
   aId: number;
@@ -17,11 +27,52 @@ interface EpisodioInfo {
   aCapaUrl: string | null;
 }
 
+/** Card de soma dos tempos livres entre duas linhas da grade: metade de baixo
+ *  do último bloco da linha de cima + metade de topo do primeiro bloco da
+ *  linha de baixo. O modal de propaganda abre sobre o par inteiro. */
+interface PropagandaGap {
+  dia: string;
+  horario: string;
+  cima: { bloco: BlocoOutput; seg: number };
+  baixo: { bloco: BlocoOutput; seg: number };
+}
+
+/** Resumo das propagandas de uma metade de um bloco (um quadrado "Livre"):
+ *  quantidade, segundos ocupados e os rótulos já formatados para o tooltip. */
+interface PropResumo {
+  qtd: number;
+  usado: number;
+  nomes: string[];
+}
+
+/** Card de soma pronto para desenhar (texto já com as propagandas descontadas). */
+interface GapResumo {
+  texto: string;
+  qtd: number;
+  titulo: string;
+}
+
+/** Intervalo que cobre um quadrado "Livre": os dois blocos envolvidos, o horário
+ *  da linha de cada um e as duas metades de tempo livre (cima = metade de baixo
+ *  do bloco de cima, baixo = metade de topo do bloco de baixo). */
+interface IntervaloQuadrado {
+  cima: BlocoOutput;
+  baixo: BlocoOutput;
+  horarioCima: string;
+  horarioBaixo: string;
+  capC: number;
+  capB: number;
+}
+
 @Component({
   selector: 'app-grade',
-  imports: [RouterLink, FormsModule],
+  imports: [RouterLink, FormsModule, PropagandaModal],
   templateUrl: './grade.html',
   styleUrl: './grade.css',
+  // OnPush: a grade só re-renderiza quando um sinal QUE ELA LÊ muda. Sem isso
+  // todo clique/tecla (zona sem zone.js = um tick por evento) re-executava o
+  // template dos 280 cards e o modal ficava lento para abrir e digitar.
+  changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class Grade implements OnInit, OnDestroy {
 
@@ -49,6 +100,11 @@ export class Grade implements OnInit, OnDestroy {
 
   readonly dias = ['Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado', 'Domingo'];
   readonly diasAbrev = ['SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB', 'DOM'];
+  // Índices de dia pré-computados: blocosFor é chamado dezenas de vezes por
+  // render (uma vez por célula + nos gaps) e antes montava dois Map por chamada.
+  private readonly diaNormCache = new Map<string, string>();
+  private readonly diasIndice = new Map(this.dias.map((d, i) => [d, i] as const));
+  private readonly diasIndiceNorm = new Map(this.dias.map((d, i) => [this.normalizeDia(d), i] as const));
 
   private readonly cavaleirosOrder = [58, 56, 57, 55, 63, 61, 60, 59];
   private isCavaleiros19Horario(bloco: BlocoOutput): boolean {
@@ -310,6 +366,8 @@ export class Grade implements OnInit, OnDestroy {
   private programaRemovedDias = new Map<number, number[]>();
   private slotPositionMap = new Map<string, number>();
   private episodioCache = new Map<number, EpisodioInfo | null>();
+  /** Episódios exibidos por bloco (1 normalmente, >1 no bloco multiepisódio). */
+  private pacoteCache = new Map<number, EpisodioInfo[]>();
   private sameDayBlocosCache = new Map<string, BlocoOutput[]>();
   private weekendBlocosCache = new Map<number, BlocoOutput[]>();
   private displacedEpisodeShift = new Map<number, number>();
@@ -333,6 +391,10 @@ export class Grade implements OnInit, OnDestroy {
   readonly detailDia = signal('');
   readonly detailHorario = signal('');
   readonly detailDeleting = signal(false);
+
+  /** Modal de propaganda: estado e lógica moram no <app-propaganda-modal>
+   *  (componente próprio, OnPush) — aqui a grade só decide QUANDO abrir. */
+  @ViewChild(PropagandaModal) private propagandaModal?: PropagandaModal;
 
   readonly currentPage = signal(0);
   readonly EPISODES_PER_PAGE = 5;
@@ -369,6 +431,7 @@ export class Grade implements OnInit, OnDestroy {
     // Sem ?page explícito, a grade abre na página da linha vermelha (a mesma
     // que o "ao vivo" está exibindo) para os dois nunca divergirem.
     this.pendingPage = !isNaN(parsed) && parsed > 0 ? parsed : this.linhaService.pagina();
+    this.carregarPropagandas();
     this._timerInterval = setInterval(() => {
       this.currentTime.set(this.nowDate());
       this.maybeRolloverPage();
@@ -521,7 +584,8 @@ export class Grade implements OnInit, OnDestroy {
               if (dayPos < 0) continue;
               const slip = slipRun.get(bloco.aPrograma.aId) ?? 0;
               const step = diasQ.length || this.EPISODES_PER_PAGE;
-              const idx = (((dayPos + p * step - slip) % eps.length) + eps.length) % eps.length;
+              const base = inicioSlot(`ep-${bloco.aPrograma.aId}`, eps, p, dayPos, step);
+              const idx = (((base - slip) % eps.length) + eps.length) % eps.length;
               ep = eps[idx];
             }
             if (!ep || !ep.aDuracao || this.parseDuracaoSec(ep.aDuracao) <= 30 * 60) continue;
@@ -860,11 +924,18 @@ export class Grade implements OnInit, OnDestroy {
     this.goToPage((this.currentPage() + 1) % this.totalPages());
   }
 
-  get filteredBlocos(): BlocoOutput[] {
+  /** Cacheada em `computed`: a mesma lista é relida várias vezes por ciclo de
+   *  render (blocosFor, faixas, getTipoDinamico) e só muda quando os blocos ou
+   *  o filtro de grade mudam. */
+  private readonly _filteredBlocos = computed(() => {
     const gid = this.selectedGradeId();
     let list = this.blocos().filter(b => b.aStatusCode === 'AT');
     if (gid !== null) list = list.filter(b => b.aGrade?.aId === gid);
     return list;
+  });
+
+  get filteredBlocos(): BlocoOutput[] {
+    return this._filteredBlocos();
   }
 
   selectBloco(bloco: BlocoOutput, dia: string, horario: string): void {
@@ -976,9 +1047,105 @@ export class Grade implements OnInit, OnDestroy {
 
   private rebuildEpisodioCache(): void {
     this.episodioCache.clear();
+    this.pacoteCache.clear();
+    limparCacheMultiEp();
     for (const b of this.filteredBlocos) {
       this.episodioCache.set(b.aId, this.getEpisodioUncached(b));
     }
+    for (const b of this.filteredBlocos) {
+      this.pacoteCache.set(b.aId, this.calcularPacote(b, b.aDiaSemanaDesc ?? ''));
+    }
+  }
+
+  /** Episódios exibidos neste bloco: 1 normalmente; mais de 1 quando os
+   *  episódios sequenciais somam menos de 30 min (multiepisódio). */
+  private calcularPacote(bloco: BlocoOutput, dia: string): EpisodioInfo[] {
+    const ep = this.getEpisodio(bloco, dia);
+    if (!ep) return [];
+    // Horários "flat" e fim de semana mantêm um episódio por bloco (o índice
+    // deles não avança por consumo de episódio).
+    if (this.isAnyFlatHorario(bloco)) return [ep];
+    const eps = bloco.aPrograma ? this.allEpisodiosMap.get(bloco.aPrograma.aId) : null;
+    if (!eps || eps.length === 0) return [ep];
+    const idx = eps.indexOf(ep);
+    if (idx < 0) return [ep];
+    return pacoteBloco(eps, idx);
+  }
+
+  episodiosDoBloco(bloco: BlocoOutput, dia: string): EpisodioInfo[] | null {
+    const p = this.pacoteCache.get(bloco.aId);
+    if (p) return p.length > 0 ? p : null;
+    const ep = this.getEpisodio(bloco, dia);
+    return ep ? [ep] : null;
+  }
+
+  /** Soma das durações dos episódios do bloco (0 quando não há duração). */
+  private duracaoPacoteSec(bloco: BlocoOutput, dia: string): number {
+    const p = this.episodiosDoBloco(bloco, dia);
+    if (!p || p.length === 0) return 0;
+    return duracaoPacote(p);
+  }
+
+  /** Segundos livres do bloco: 30 min − soma das durações dos episódios
+   *  exibidos (no multiepisódio, a soma de todos eles). */
+  private tempoLivrePacoteSeg(bloco: BlocoOutput, dia: string): number {
+    const p = this.episodiosDoBloco(bloco, dia);
+    if (!p || p.length === 0 || !p[0].aDuracao) return 0;
+    return Math.max(0, 30 * 60 - duracaoPacote(p));
+  }
+
+  /** Colunas da lista de episódios do bloco: 1 coluna até 5 episódios, 2 acima. */
+  colunasPacote(eps: EpisodioInfo[]): EpisodioInfo[][] {
+    if (eps.length <= 5) return [eps];
+    const meio = Math.ceil(eps.length / 2);
+    return [eps.slice(0, meio), eps.slice(meio)];
+  }
+
+  /** Altura de linha que mantém a lista inteira dentro dos 50px livres do card. */
+  alturaLinhaPacote(n: number): number {
+    const porColuna = n <= 5 ? n : Math.ceil(n / 2);
+    return Math.min(12, Math.floor(50 / Math.max(1, porColuna)));
+  }
+
+  /** Código curto do episódio (E9, ou T2E9 quando a temporada > 1). Quando o
+   *  número não vem estruturado, tenta ler do título ("Ep.07.Tom&Jerry...").
+   *  Mantém o sufixo de segmento do título ("S1 E08C" → E8C) para não exibir
+   *  duas linhas com o mesmo código. */
+  epCodigo(ep: EpisodioInfo): string {
+    if (ep.aNumero != null) {
+      const t = ep.aTemporada && ep.aTemporada > 1 ? `T${ep.aTemporada}` : '';
+      return `${t}E${ep.aNumero}${sufixoEpisodio(ep.aNumero, ep.aTitulo)}`;
+    }
+    const m = (ep.aTitulo ?? '').match(/ep\.?\s*(\d+)/i);
+    return m ? `E${m[1]}` : '';
+  }
+
+  /** Título sem o "Ep.NN." inicial (que já vira o código da linha). */
+  tituloCurto(ep: EpisodioInfo): string {
+    return (ep.aTitulo ?? '').replace(/^\s*ep\.?\s*\d+\s*[.:\-]?\s*/i, '');
+  }
+
+  /** Tempo livre do bloco aberto no modal (soma dos episódios no multiepisódio). */
+  getTempoLivreBloco(): string | null {
+    const bloco = this.detailBloco();
+    if (!bloco) return null;
+    const seg = this.tempoLivrePacoteSeg(bloco, this.detailDia());
+    return seg > 0 ? this.formatSec(seg) : '00:00';
+  }
+
+  /** Quantos episódios o bloco aberto no modal exibe. */
+  qtdEpisodiosBloco(): number {
+    const bloco = this.detailBloco();
+    if (!bloco) return 1;
+    return this.episodiosDoBloco(bloco, this.detailDia())?.length ?? 1;
+  }
+
+  /** Duração total dos episódios do bloco aberto no modal. */
+  getDuracaoBloco(): string | null {
+    const bloco = this.detailBloco();
+    if (!bloco) return null;
+    const seg = this.duracaoPacoteSec(bloco, this.detailDia());
+    return seg > 0 ? this.formatSec(seg) : null;
   }
 
   private getEpisodioUncached(bloco: BlocoOutput): EpisodioInfo | null {
@@ -1010,8 +1177,15 @@ export class Grade implements OnInit, OnDestroy {
       return eps[finalIdx];
     }
 
-    const pageOffset = this.currentPage() * this.pageStep(bloco.aPrograma.aId);
-    const globalIdx = dayPosition + pageOffset;
+    // O bloco consome os episódios que ele exibe: o índice do próximo bloco
+    // só começa depois dos episódios já mostrados (multiepisódio).
+    const globalIdx = inicioSlot(
+      `ep-${bloco.aPrograma.aId}`,
+      eps,
+      this.currentPage(),
+      dayPosition,
+      this.pageStep(bloco.aPrograma.aId),
+    );
     if (this.displacedEpisodeShift.has(bloco.aId)) {
       const naturalIdx = ((globalIdx % eps.length) + eps.length) % eps.length;
       return eps[naturalIdx];
@@ -1151,9 +1325,7 @@ export class Grade implements OnInit, OnDestroy {
 
   blocosFor(dia: string, horario: string): BlocoOutput[] {
     if (this.effectiveSchedule.size > 0) {
-      const diasIndice = new Map(this.dias.map((d, i) => [d, i]));
-      const diasIndiceNorm = new Map(this.dias.map((d, i) => [this.normalizeDia(d), i]));
-      const dIdx = diasIndice.get(dia) ?? diasIndiceNorm.get(this.normalizeDia(dia)) ?? -1;
+      const dIdx = this.diasIndice.get(dia) ?? this.diasIndiceNorm.get(this.normalizeDia(dia)) ?? -1;
       if (dIdx >= 0) {
         const key = `${dIdx}|${horario}`;
         if (this.effectiveSchedule.has(key)) {
@@ -1226,7 +1398,7 @@ export class Grade implements OnInit, OnDestroy {
     return Math.max(0, 30 * 60 - totalSec);
   }
 
-  private formatSec(mm: number): string {
+  formatSec(mm: number): string {
     const m = Math.floor(mm / 60);
     const s = mm % 60;
     return `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
@@ -1258,42 +1430,106 @@ export class Grade implements OnInit, OnDestroy {
     return Math.max(0, totalSlotSec - totalSec);
   }
 
-  getTempoLivreTopo(bloco: BlocoOutput, dia: string, horario?: string): string {
+  /** Segundos livres na parte de cima da célula (metade dianteira do ocioso). */
+  private tempoLivreTopoSeg(bloco: BlocoOutput, dia: string, horario?: string): number {
     if (this.isMultiBloco(bloco, dia)) {
       const h = horario ?? bloco.aHorario?.substring(0, 5) ?? '';
-      const idx = this.slotIndex(dia, h);
-      if (idx !== 0) return '00:00';
+      if (this.slotIndex(dia, h) !== 0) return 0;
       const ep = this.getEpisodio(bloco, dia);
-      if (!ep) return '00:00';
-      const livre = this.multiBlocoFreeTime(ep);
-      if (livre <= 0) return '00:00';
-      return this.formatSec(Math.floor(livre / 2));
+      if (!ep) return 0;
+      return Math.max(0, Math.floor(this.multiBlocoFreeTime(ep) / 2));
     }
     const ep = this.getEpisodio(bloco, dia);
-    if (!ep) return '00:00';
-    const livre = this.tempoLivreSec(ep);
-    if (livre <= 0) return '00:00';
-    return this.formatSec(Math.floor(livre / 2));
+    if (!ep) return 0;
+    return Math.max(0, Math.floor(this.tempoLivrePacoteSeg(bloco, dia) / 2));
+  }
+
+  /** Segundos livres na parte de baixo da célula (metade traseira do ocioso). */
+  private tempoLivreBaixoSeg(bloco: BlocoOutput, dia: string, horario?: string): number {
+    const ep = this.getEpisodio(bloco, dia);
+    if (!ep || !ep.aDuracao) return 0;
+    if (!this.isMultiBloco(bloco, dia)) {
+      return Math.max(0, Math.ceil(this.tempoLivrePacoteSeg(bloco, dia) / 2));
+    }
+    const h = horario ?? bloco.aHorario?.substring(0, 5) ?? '';
+    if (this.slotIndex(dia, h) !== this.slotsForEpisode(ep) - 1) return 0;
+    return Math.max(0, Math.ceil(this.multiBlocoFreeTime(ep) / 2));
+  }
+
+  getTempoLivreTopo(bloco: BlocoOutput, dia: string, horario?: string): string {
+    const seg = this.tempoLivreTopoSeg(bloco, dia, horario);
+    return seg > 0 ? this.formatSec(seg) : '00:00';
   }
 
   getTempoLivreBaixo(bloco: BlocoOutput, dia: string, horario?: string): string {
-    const ep = this.getEpisodio(bloco, dia);
-    if (!ep || !ep.aDuracao) return '00:00';
+    const seg = this.tempoLivreBaixoSeg(bloco, dia, horario);
+    return seg > 0 ? this.formatSec(seg) : '00:00';
+  }
 
-    if (!this.isMultiBloco(bloco, dia)) {
-      const livre = this.tempoLivreSec(ep);
-      if (livre <= 0) return '00:00';
-      return this.formatSec(Math.ceil(livre / 2));
+  /** Segundos livres entre o episódio desta linha e o da próxima, na mesma coluna
+   *  do dia: soma do "Livre" de baixo do primeiro com o "Livre" de cima do
+   *  próximo. Retorna 0 quando não há os dois episódios (ou quando é o mesmo
+   *  multibloco passando pelas duas linhas — aí os dois lados já valem 0). */
+  gapEntreLinhas(dia: string, horario: string): number {
+    const i = this.horarios.indexOf(horario);
+    const proxHorario = i >= 0 ? this.horarios[i + 1] : undefined;
+    if (!proxHorario) return 0;
+    const atual = this.blocosFor(dia, horario);
+    const proximo = this.blocosFor(dia, proxHorario);
+    if (!atual.length || !proximo.length) return 0;
+    const baixo = this.tempoLivreBaixoSeg(atual[atual.length - 1], dia, horario);
+    const topo = this.tempoLivreTopoSeg(proximo[0], dia, proxHorario);
+    return baixo + topo;
+  }
+
+  /** Card de soma desta linha com a próxima, pronto para desenhar: o texto já
+   *  vem com as propagandas dos dois lados (BA do último bloco da linha + TO do
+   *  primeiro da seguinte) descontadas e o tooltip lista cada peça. `null` =
+   *  não desenha o card (fim de semana, extremos ou soma zero — a mesma regra
+   *  de quando o intervalo cobre um quadrado, em `intervaloDoQuadrado`). */
+  gapResumo(dia: string, horario: string): GapResumo | null {
+    if (this.isFimDeSemana(dia)) return null;
+    const total = this.gapEntreLinhas(dia, horario);
+    if (total <= 0) return null;
+
+    let qtd = 0;
+    let usado = 0;
+    const nomes: string[] = [];
+
+    const i = this.horarios.indexOf(horario);
+    const proxHorario = i >= 0 ? this.horarios[i + 1] : undefined;
+    if (proxHorario) {
+      const atual = this.blocosFor(dia, horario);
+      const proximo = this.blocosFor(dia, proxHorario);
+      const lados: (PropResumo | null)[] = [
+        atual.length ? this.resumoProp(atual[atual.length - 1].aId, 'BA') : null,
+        proximo.length ? this.resumoProp(proximo[0].aId, 'TO') : null,
+      ];
+      for (const r of lados) {
+        if (!r) continue;
+        qtd += r.qtd;
+        usado += r.usado;
+        nomes.push(...r.nomes);
+      }
     }
 
-    const h = horario ?? bloco.aHorario?.substring(0, 5) ?? '';
-    const slots = this.slotsForEpisode(ep);
-    const idx = this.slotIndex(dia, h);
-    if (idx !== slots - 1) return '00:00';
+    const restante = Math.max(0, total - usado);
+    const base = 'Soma dos tempos livres — clique para adicionar propaganda';
+    const titulo = qtd > 0
+      ? `${base}\nPropagandas: ${nomes.join(' · ')}\nUsado ${this.formatSec(usado)} · Resta ${this.formatSec(restante)}`
+      : base;
+    return { texto: this.formatSec(restante), qtd, titulo };
+  }
 
-    const livre = this.multiBlocoFreeTime(ep);
-    if (livre <= 0) return '00:00';
-    return this.formatSec(Math.ceil(livre / 2));
+  /** 52 px = "Livre" de baixo (15) + folga entre as células (8) + "Livre" de
+   *  cima da linha seguinte (15) + padding/borda das duas células (7 + 7).
+   *  Quando uma faixa de período separa as duas linhas, ela ocupa 44 px no
+   *  lugar dos 8 px de folga: 52 + 36 = 88. */
+  gapAltura(horario: string): number {
+    const i = this.horarios.indexOf(horario);
+    const prox = i >= 0 ? this.horarios[i + 1] : undefined;
+    if (!prox || !this.showFaixaHeader(prox, i + 1)) return 52;
+    return 88;
   }
 
   formatDuracao(duracao: string | null): string {
@@ -1336,17 +1572,31 @@ export class Grade implements OnInit, OnDestroy {
   }
 
 
+  /** Memoizada: o `[innerHTML]` do card recebe um SafeHtml NOVO a cada render e
+   *  o Angular reescrevia os 259 spans (parse de HTML) mesmo com o mesmo texto.
+   *  Devolver sempre o mesmo objeto faz o binding ser pulado. */
+  private readonly txExPxCache = new Map<string, SafeHtml>();
+
   formatTxExPx(ep: { aTemporada: number | null; aNumero: number | null; aParte: number | null; aTitulo?: string | null }): SafeHtml {
+    const chave = `${ep.aTemporada ?? ''}|${ep.aParte ?? ''}|${ep.aNumero ?? ''}|${ep.aTitulo ?? ''}`;
+    const cacheado = this.txExPxCache.get(chave);
+    if (cacheado) return cacheado;
     const parts: string[] = [];
     if (ep.aTemporada) parts.push(`<span style="color:#f472b6;font-weight:bold;">T${ep.aTemporada}</span>`);
     const hasParteNoTitulo = !!(ep as any).aTitulo && (ep as any).aTitulo.toLowerCase().includes('parte');
     if (ep.aParte != null && !hasParteNoTitulo) parts.push(`<span style="color:#facc15;font-weight:bold;">P${ep.aParte === 0 ? 1 : ep.aParte}</span>`);
-    if (ep.aNumero) parts.push(`<span style="color:#60a5fa;font-weight:bold;">E${ep.aNumero}</span>`);
-    return this.sanitizer.bypassSecurityTrustHtml(parts.join(' '));
+    if (ep.aNumero) parts.push(`<span style="color:#60a5fa;font-weight:bold;">E${ep.aNumero}${sufixoEpisodio(ep.aNumero, ep.aTitulo)}</span>`);
+    const html = this.sanitizer.bypassSecurityTrustHtml(parts.join(' '));
+    this.txExPxCache.set(chave, html);
+    return html;
   }
 
   private normalizeDia(d: string): string {
-    return d.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const cacheado = this.diaNormCache.get(d);
+    if (cacheado !== undefined) return cacheado;
+    const norm = d.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    this.diaNormCache.set(d, norm);
+    return norm;
   }
 
   faixaNome(horario: string): string {
@@ -1437,6 +1687,217 @@ export class Grade implements OnInit, OnDestroy {
       },
     });
   }
+
+  // ── Propagandas no tempo livre ─────────────────────────────────────────
+
+  private readonly propagandaService = inject(PropagandaService);
+
+  /** Propagandas ativas agrupadas por `${blocoId}|${TO|BA}`. Alimenta os
+   *  marcadores 📢 e o tempo RESTANTE nos quadrados "Livre" e nos cards de
+   *  intervalo — recarregado quando o modal cria/edita/remove uma propaganda. */
+  readonly propResumo = signal<Map<string, PropResumo>>(new Map());
+
+  /** Carrega tudo de uma vez (1 chamada), em vez de uma por bloco. */
+  carregarPropagandas(): void {
+    this.propagandaService.listAll().subscribe({
+      next: (res) => {
+        const mapa = new Map<string, PropResumo>();
+        for (const p of res.aPropagandas ?? []) {
+          if (p.aBlocoId == null) continue;
+          const posicao: PropagandaPosicaoCode = p.aPosicao === 'Base' ? 'BA' : 'TO';
+          const chave = `${p.aBlocoId}|${posicao}`;
+          let r = mapa.get(chave);
+          if (!r) {
+            r = { qtd: 0, usado: 0, nomes: [] };
+            mapa.set(chave, r);
+          }
+          const seg = p.aDuracaoSeg ?? 0;
+          r.qtd++;
+          r.usado += seg;
+          // rótulo pronto: o tooltip não formata nada durante o render
+          r.nomes.push(`${p.aNome} (${this.formatSec(seg)})`);
+        }
+        this.propResumo.set(mapa);
+      },
+      error: () => undefined,
+    });
+  }
+
+  private resumoProp(blocoId: number, posicao: PropagandaPosicaoCode): PropResumo | null {
+    return this.propResumo().get(`${blocoId}|${posicao}`) ?? null;
+  }
+
+  /** Segundos livres na metade (topo/base) da célula do bloco. */
+  tempoLivrePosicaoSeg(bloco: BlocoOutput, dia: string, posicao: PropagandaPosicaoCode, horario?: string): number {
+    return posicao === 'TO'
+      ? this.tempoLivreTopoSeg(bloco, dia, horario)
+      : this.tempoLivreBaixoSeg(bloco, dia, horario);
+  }
+
+  /** Informações do card de soma (gap) entre esta linha da grade e a seguinte:
+   *  metade de baixo do último bloco da linha + metade de topo do primeiro da
+   *  próxima. Retorna null quando não existe card (fim de semana, extremos ou
+   *  soma zero). */
+  gapInfo(dia: string, horario: string): PropagandaGap | null {
+    const i = this.horarios.indexOf(horario);
+    const proxHorario = i >= 0 ? this.horarios[i + 1] : undefined;
+    if (!proxHorario) return null;
+    const atual = this.blocosFor(dia, horario);
+    const proximo = this.blocosFor(dia, proxHorario);
+    if (!atual.length || !proximo.length) return null;
+    const cima = atual[atual.length - 1];
+    const baixo = proximo[0];
+    const segCima = this.tempoLivreBaixoSeg(cima, dia, horario);
+    const segBaixo = this.tempoLivreTopoSeg(baixo, dia, proxHorario);
+    if (segCima + segBaixo <= 0) return null;
+    return { dia, horario, cima: { bloco: cima, seg: segCima }, baixo: { bloco: baixo, seg: segBaixo } };
+  }
+
+  private horarioAnterior(horario: string): string | null {
+    const i = this.horarios.indexOf(horario);
+    return i > 0 ? this.horarios[i - 1] : null;
+  }
+
+  private proximoHorario(horario: string): string | null {
+    const i = this.horarios.indexOf(horario);
+    return i >= 0 && i + 1 < this.horarios.length ? this.horarios[i + 1] : null;
+  }
+
+  /** Os dois blocos de um intervalo — horário da linha de cada um e as duas
+   *  metades de tempo livre — quando este quadrado está coberto pelo card de
+   *  soma (é o mesmo par que `gapEntreLinhas` usa, só que com o resultado
+   *  guardado). Null = o quadrado não está coberto. */
+  private intervaloDoQuadrado(dia: string, horario: string, bloco: BlocoOutput, posicao: PropagandaPosicaoCode): IntervaloQuadrado | null {
+    const atual = this.blocosFor(dia, horario);
+    if (!atual.length || this.isFimDeSemana(dia)) return null;
+    if (posicao === 'BA') {
+      if (atual[atual.length - 1].aId !== bloco.aId) return null;
+      const prox = this.proximoHorario(horario);
+      if (!prox) return null;
+      const proximo = this.blocosFor(dia, prox);
+      if (!proximo.length) return null;
+      const capC = this.tempoLivreBaixoSeg(bloco, dia, horario);
+      const capB = this.tempoLivreTopoSeg(proximo[0], dia, prox);
+      if (capC + capB <= 0) return null;
+      return { cima: bloco, baixo: proximo[0], horarioCima: horario, horarioBaixo: prox, capC, capB };
+    }
+    if (atual[0].aId !== bloco.aId) return null;
+    const anterior = this.horarioAnterior(horario);
+    if (!anterior) return null;
+    const anteriores = this.blocosFor(dia, anterior);
+    if (!anteriores.length) return null;
+    const cima = anteriores[anteriores.length - 1];
+    const capC = this.tempoLivreBaixoSeg(cima, dia, anterior);
+    const capB = this.tempoLivreTopoSeg(bloco, dia, horario);
+    if (capC + capB <= 0) return null;
+    return { cima, baixo: bloco, horarioCima: anterior, horarioBaixo: horario, capC, capB };
+  }
+
+  /** O quadrado está coberto pelo card de soma (BA do último bloco da linha e
+   *  TO do primeiro da linha seguinte — o card é desenhado por cima dos dois). */
+  quadradoCobertoPorGap(dia: string, horario: string, bloco: BlocoOutput, posicao: PropagandaPosicaoCode): boolean {
+    return this.intervaloDoQuadrado(dia, horario, bloco, posicao) !== null;
+  }
+
+  /** Resumo do quadrado "Livre" numa única chamada (estado + tooltip + texto).
+   *  A template fazia 4 passagens pelo mesmo cálculo por card; aqui é uma.
+   *  O texto é SEMPRE o tempo livre do espaço (o tamanho da vaga — propaganda
+   *  nenhuma zera isso); o saldo (livre − usado) aparece no tooltip e no card
+   *  do intervalo, e o 📢 conta quantas peças já estão naquele espaço.
+   *  Quadrado somado no card do intervalo: vale o intervalo inteiro — o lado de
+   *  cima transborda para o de baixo (a mesma regra do modal), então a sobra é
+   *  a daquele lado já com o transbordo descontado e o 📢 conta as peças dos
+   *  dois lados. */
+  infoTempoLivre(dia: string, horario: string, bloco: BlocoOutput, posicao: PropagandaPosicaoCode): { ativo: boolean; titulo: string; texto: string; qtd: number } {
+    const iv = this.intervaloDoQuadrado(dia, horario, bloco, posicao);
+    const coberto = iv !== null;
+    // Metade livre DESTE quadrado: no intervalo ela vem pronta do cálculo do
+    // card de soma (evita repetir a conta), fora dele é só o tempo livre do
+    // lado. Cada quadrado continua mostrando o tempo livre do PRÓPRIO lado —
+    // o total do intervalo é só o que aparece no card de soma.
+    const seg = iv
+      ? (posicao === 'BA' ? iv.capC : iv.capB)
+      : (posicao === 'TO' ? this.tempoLivreTopoSeg(bloco, dia, horario) : this.tempoLivreBaixoSeg(bloco, dia, horario));
+    const prop = this.resumoProp(bloco.aId, posicao);
+    const usado = prop?.usado ?? 0;
+    const restante = Math.max(0, seg - usado);
+
+    let titulo = coberto
+      ? 'Espaço somado no card do intervalo'
+      : (seg > 0 ? 'Adicionar propaganda neste espaço' : 'Sem tempo livre');
+    if (prop && prop.qtd > 0) {
+      titulo += `\nPropagandas: ${prop.nomes.join(' · ')}`
+        + `\nUsado ${this.formatSec(usado)} de ${this.formatSec(seg)} · Resta ${this.formatSec(restante)}`;
+    }
+
+    return {
+      ativo: !coberto && seg > 0,
+      titulo,
+      // O quadrado mostra o TEMPO LIVRE do espaço (a vaga continua existindo
+      // com o mesmo tamanho mesmo com propaganda dentro dela); o saldo
+      // (livre − usado) fica no tooltip e no card do intervalo.
+      texto: seg > 0 ? this.formatSec(seg) : '00:00',
+      qtd: prop?.qtd ?? 0,
+    };
+  }
+
+  /** Título/tooltips do quadrado "Livre". */
+  tituloQuadradoLivre(bloco: BlocoOutput, dia: string, posicao: PropagandaPosicaoCode, horario: string): string {
+    if (this.quadradoCobertoPorGap(dia, horario, bloco, posicao)) {
+      return 'Espaço somado no card do intervalo';
+    }
+    return this.tempoLivrePosicaoSeg(bloco, dia, posicao, horario) > 0
+      ? 'Adicionar propaganda neste espaço'
+      : 'Sem tempo livre';
+  }
+
+  cliqueTempoLivre(bloco: BlocoOutput, dia: string, posicao: PropagandaPosicaoCode, horario: string): void {
+    // Quadrado coberto pelo card de soma: o clique abre o intervalo inteiro.
+    if (this.quadradoCobertoPorGap(dia, horario, bloco, posicao)) {
+      const linhaGap = posicao === 'BA' ? horario : this.horarioAnterior(horario);
+      if (linhaGap) this.abrirGapPropagandas(dia, linhaGap);
+      return;
+    }
+    if (this.tempoLivrePosicaoSeg(bloco, dia, posicao, horario) <= 0) return;
+    this.abrirPropagandas(bloco, dia, posicao, horario);
+  }
+
+  abrirPropagandas(bloco: BlocoOutput, dia: string, posicao: PropagandaPosicaoCode, horario: string): void {
+    const seg = this.tempoLivrePosicaoSeg(bloco, dia, posicao, horario);
+    if (seg <= 0) return;
+    const ctx: PropagandaContexto = {
+      intervalo: false,
+      titulo: posicao === 'TO' ? 'Livre topo' : 'Livre base',
+      subtitulo: `${bloco.aPrograma?.aNome ?? ''} · ${dia} · ${horario}`,
+      lados: [{ lado: 'C', blocoId: bloco.aId, posicao, capacidade: seg }],
+      aoAlterar: () => this.carregarPropagandas(),
+    };
+    this.propagandaModal?.abrir(ctx);
+  }
+
+  /** Abre pelo card de soma: o modal cobre os dois lados do intervalo (BA do
+   *  bloco de cima + TO do bloco de baixo) com o total somado. */
+  abrirGapPropagandas(dia: string, horario: string): void {
+    const gap = this.gapInfo(dia, horario);
+    if (!gap) return;
+    const i = this.horarios.indexOf(gap.horario);
+    const prox = i >= 0 ? this.horarios[i + 1] : gap.horario;
+    const cima = gap.cima.bloco.aPrograma?.aNome ?? '';
+    const baixo = gap.baixo.bloco.aPrograma?.aNome ?? '';
+    const nomes = cima && baixo ? `entre ${cima} e ${baixo}` : (cima || baixo);
+    const ctx: PropagandaContexto = {
+      intervalo: true,
+      titulo: 'Intervalo livre',
+      subtitulo: `${nomes} · ${dia} · ${gap.horario} – ${prox}`,
+      lados: [
+        { lado: 'C', blocoId: gap.cima.bloco.aId, posicao: 'BA', capacidade: gap.cima.seg },
+        { lado: 'B', blocoId: gap.baixo.bloco.aId, posicao: 'TO', capacidade: gap.baixo.seg },
+      ],
+      aoAlterar: () => this.carregarPropagandas(),
+    };
+    this.propagandaModal?.abrir(ctx);
+  }
+
 
   tipoColor(tipo: string | null): string {
     if (!tipo) return 'border-gray-600 bg-gray-800/80';
@@ -1558,7 +2019,7 @@ export class Grade implements OnInit, OnDestroy {
     const ep = this.getEpisodio(bloco, diaNome);
     if (!ep || !ep.aDuracao) return linear;
 
-    const epSec = this.parseDuracaoSec(ep.aDuracao);
+    const epSec = this.duracaoPacoteSec(bloco, diaNome);
     if (epSec <= 0) return linear;
 
     // Linha percorre as três faixas visuais da fileira ATUAL (slot de 30 min):
@@ -1640,7 +2101,7 @@ export class Grade implements OnInit, OnDestroy {
     const bloco = blocos[0];
     const ep = this.getEpisodio(bloco, diaNome);
     if (!ep || !ep.aDuracao) return 0;
-    return this.tempoLivreSec(ep);
+    return this.tempoLivrePacoteSeg(bloco, diaNome);
   }
 
   private fatorVelocidadeAcima(livreSec: number): number {
@@ -1944,15 +2405,10 @@ export class Grade implements OnInit, OnDestroy {
     if (mesmoDiaSameEp) return 'Reprise';
 
     const step = this.pageStep(programaId);
-    const pageOffset = this.currentPage() * step;
-    const currentIdx = (dayPosition + pageOffset) % eps.length;
-
-    for (let p = 0; p < this.currentPage(); p++) {
-      const pOffset = p * step;
-      for (const dp of diasQuePassa) {
-        if ((dp + pOffset) % eps.length === currentIdx) return 'Reprise';
-      }
-    }
+    // O bloco consome os episódios que exibe: a posição (sem módulo) diz se a
+    // sequência já deu a volta na lista — aí o episódio já foi exibido antes.
+    const offsetAtual = offsetSlot(`ep-${programaId}`, eps, this.currentPage(), dayPosition, step);
+    if (offsetAtual >= eps.length) return 'Reprise';
 
     return original || 'Inédito';
   }

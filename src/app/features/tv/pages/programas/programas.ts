@@ -1,6 +1,7 @@
 import { Component, signal, inject, OnInit } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { TvService, ProgramaOutput, EpisodioOutput } from '../../services/tv.service';
+import { sufixoEpisodio } from '../../utils/multi-episodio';
 
 interface SeasonGroup {
   season: number;
@@ -136,5 +137,11 @@ export class Programas implements OnInit {
 
   hasFile(ep: EpisodioOutput): boolean {
     return ep.aArquivo != null;
+  }
+
+  /** Número do episódio com o sufixo de segmento lido do título (8C, 14.5). */
+  epNumero(ep: EpisodioOutput): string {
+    if (ep.aNumero == null) return '';
+    return `${ep.aNumero}${sufixoEpisodio(ep.aNumero, ep.aTitulo)}`;
   }
 }

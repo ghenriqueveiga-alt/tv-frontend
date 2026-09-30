@@ -128,7 +128,7 @@
                     </p>
                     <div class="flex items-center gap-2 mt-0.5">
                       @if (ep.aNumero) {
-                        <span class="text-xs text-gray-500">#{{ ep.aNumero }}</span>
+                        <span class="text-xs text-gray-500">#{{ epNumero(ep) }}</span>
                       }
                       @if (hasFile(ep)) {
                         <span class="text-[10px] bg-green-900 text-green-300 px-1.5 py-0.5 rounded">Arquivo</span>

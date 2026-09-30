@@ -1,0 +1,168 @@
+<!-- ── Propagandas no Tempo Livre (componente próprio, OnPush) ── -->
+@if (propAberto()) {
+  <div class="modal-backdrop" (click)="fecharPropagandas()">
+    <div class="modal-panel" (click)="$event.stopPropagation()">
+
+      <div class="px-5 py-4 flex items-center justify-between" style="border-bottom: 1px solid #e2e8f0;">
+        <div class="flex items-center gap-3 min-w-0">
+          <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+               style="background: linear-gradient(135deg, #0ea5e9, #2563eb);">
+            <span class="text-sm">📢</span>
+          </div>
+          <div class="min-w-0">
+            <h2 class="text-sm font-bold" style="color:#0f172a;">Propagandas &middot; {{ propTitulo() }}</h2>
+            <p class="text-[11px] truncate mt-0.5" style="color:#64748b;">{{ propSubtitulo() }}</p>
+          </div>
+        </div>
+        <button (click)="fecharPropagandas()"
+                class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-lg"
+                style="color:#64748b;">
+          &times;
+        </button>
+      </div>
+
+      <!-- Resumo do espaço -->
+      <div class="px-5 py-3 flex flex-wrap items-center gap-2" style="border-bottom: 1px solid #e2e8f0;">
+        <span class="badge">Disponível {{ formatarDuracaoProp(propDisponivelSeg()) }}</span>
+        <span class="badge">Usado {{ formatarDuracaoProp(propUsadoSeg()) }}</span>
+        <span class="badge"
+              [class.badge-especial]="propRestanteSeg() === 0"
+              [class.badge-inedito]="propRestanteSeg() > 0">Resta {{ formatarDuracaoProp(propRestanteSeg()) }}</span>
+        @if (propGap()) {
+          <span class="w-full font-mono text-[10px]" style="color:#64748b;">
+            acima {{ formatarDuracaoProp(propCapacidadeLadoSeg('C')) }} &middot; sobra {{ formatarDuracaoProp(propRestanteLadoSeg('C')) }}
+            &nbsp;|&nbsp;
+            abaixo {{ formatarDuracaoProp(propCapacidadeLadoSeg('B')) }} &middot; sobra {{ formatarDuracaoProp(propRestanteLadoSeg('B')) }}
+          </span>
+        }
+      </div>
+
+      <div class="px-5 py-4 space-y-4">
+
+        <!-- Lista de propagandas -->
+        @if (propCarregando()) {
+          <p class="text-[12px]" style="color:#94a3b8;">Carregando...</p>
+        } @else if (propLista().length > 0) {
+          <div class="space-y-1">
+            @for (p of propLista(); track p.aId; let i = $index) {
+              <div class="prop-item" [class.prop-item-editando]="propEditando()?.aId === p.aId">
+                <span class="prop-ordem">{{ i + 1 }}</span>
+                @if (propGap()) {
+                  <span class="prop-lado" [class.prop-lado-baixo]="propItemLado(p) === 'B'">{{ propItemLadoTexto(p) }}</span>
+                }
+                <div class="flex-1 min-w-0">
+                  <div class="text-[13px] font-medium truncate" style="color:#0f172a;">{{ p.aNome }}</div>
+                  @if (p.aArquivoNome) {
+                    <div class="text-[10px] truncate" style="color:#94a3b8;">{{ p.aArquivoNome }}</div>
+                  }
+                </div>
+                <span class="font-mono text-[11px] shrink-0" style="color:#475569;">{{ formatarDuracaoProp(p.aDuracaoSeg) }}</span>
+                <button class="prop-acao" title="Subir" [disabled]="!propPodeMover(p, -1)" (click)="moverPropaganda(p, -1)">&#8593;</button>
+                <button class="prop-acao" title="Descer" [disabled]="!propPodeMover(p, 1)" (click)="moverPropaganda(p, 1)">&#8595;</button>
+                <button class="prop-acao" title="Editar" [disabled]="propSaving()" (click)="editarPropaganda(p)">&#9998;</button>
+                <button class="prop-acao prop-acao-perigo" title="Remover" [disabled]="propSaving()" (click)="removerPropaganda(p)">&times;</button>
+              </div>
+            }
+          </div>
+        } @else {
+          <p class="text-[12px]" style="color:#94a3b8;">Nenhuma propaganda neste espaço ainda.</p>
+        }
+
+        <!-- Origem: manual ou catálogo -->
+        <div class="flex gap-2">
+          <button class="tipo-btn"
+                  [class.active]="propAba() === 'manual'"
+                  [class.inactive]="propAba() !== 'manual'"
+                  (click)="abrirAbaProp('manual')">Manual</button>
+          <button class="tipo-btn"
+                  [class.active]="propAba() === 'catalogo'"
+                  [class.inactive]="propAba() !== 'catalogo'"
+                  (click)="abrirAbaProp('catalogo')">Catálogo</button>
+        </div>
+
+        @if (propAba() === 'catalogo') {
+          <div>
+            <label class="block text-[11px] font-semibold mb-1.5 uppercase tracking-wider" style="color:#64748b;">Arquivo</label>
+            <input type="text"
+                   [ngModel]="propBusca()"
+                   (ngModelChange)="buscarArquivosProp($event)"
+                   placeholder="Buscar no catalogo..."
+                   class="grade-input" />
+            @if (propArquivos().length > 0 && !propArquivoSel()) {
+              <div class="mt-1 max-h-40 overflow-y-auto search-dropdown">
+                @for (a of propArquivos(); track a.aId) {
+                  <div class="search-dropdown-item" (click)="selecionarArquivoProp(a)">
+                    <span class="truncate">{{ a.aNome }}</span>
+                    <span class="ml-auto text-[10px] shrink-0" style="color:#94a3b8;">{{ a.aTipo }}</span>
+                  </div>
+                }
+              </div>
+            }
+            @if (propArquivoSel(); as ar) {
+              <div class="mt-1.5 flex items-center gap-2 px-3 py-2 rounded-lg" style="background: rgba(14,165,233,0.08); border: 1px solid rgba(14,165,233,0.25);">
+                <span class="text-sm flex-1 font-medium truncate" style="color:#0369a1;">{{ ar.aNome }}</span>
+                @if (propDetectando()) {
+                  <span class="text-[11px] shrink-0" style="color:#64748b;">lendo duracao...</span>
+                }
+                <button class="w-5 h-5 rounded flex items-center justify-center shrink-0 text-xs"
+                        style="color:#64748b;"
+                        (click)="limparArquivoProp()">&times;</button>
+              </div>
+            }
+          </div>
+        }
+
+        <!-- Nome -->
+        <div>
+          <label class="block text-[11px] font-semibold mb-1.5 uppercase tracking-wider" style="color:#64748b;">Nome</label>
+          <input type="text"
+                 [ngModel]="propNome()"
+                 (ngModelChange)="propNome.set($event)"
+                 placeholder="Ex.: Abertura loja X"
+                 class="grade-input" />
+        </div>
+
+        <!-- Duracao -->
+        <div>
+          <label class="block text-[11px] font-semibold mb-1.5 uppercase tracking-wider" style="color:#64748b;">Duração (mm:ss ou segundos)</label>
+          <input type="text"
+                 [ngModel]="propDuracao()"
+                 (ngModelChange)="propDuracao.set($event)"
+                 placeholder="00:30"
+                 class="grade-input" />
+          @if (propDetectando()) {
+            <p class="text-[11px] mt-1" style="color:#64748b;">Lendo a duração do arquivo...</p>
+          } @else if (propDuracaoFalhou()) {
+            <p class="text-[11px] mt-1" style="color:#b45309;">Não foi possível ler a duração deste arquivo — informe manualmente.</p>
+          }
+          @if (propDuracaoExcede()) {
+            <p class="text-[11px] mt-1" style="color:#dc2626;">{{ propDuracaoExcedeTexto() }}</p>
+          } @else if (propAlvoTexto(); as lado) {
+            <p class="text-[11px] mt-1" style="color:#0369a1;">Será gravada no espaço {{ lado }}.</p>
+          }
+        </div>
+
+        @if (propErro()) {
+          <p class="text-[12px]" style="color:#dc2626;">{{ propErro() }}</p>
+        }
+        @if (propRestanteSeg() === 0 && propLista().length > 0 && !propEditando()) {
+          <p class="text-[12px]" style="color:#b45309;">Espaço esgotado: remova ou encurte uma propaganda antes de adicionar outra.</p>
+        }
+
+      </div>
+
+      <div class="px-5 py-3 flex justify-end gap-2" style="border-top: 1px solid #e2e8f0;">
+        @if (propEditando()) {
+          <button class="btn-secondary" (click)="cancelarEdicaoProp()">Cancelar edição</button>
+        }
+        <button class="btn-secondary" (click)="fecharPropagandas()">Fechar</button>
+        <button class="btn-primary"
+                [disabled]="!propPodeSalvar() || propSaving()"
+                (click)="salvarPropaganda()">
+          {{ propSaving() ? 'Salvando...' : (propEditando() ? 'Salvar' : 'Adicionar') }}
+        </button>
+      </div>
+
+    </div>
+  </div>
+}

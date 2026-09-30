@@ -154,31 +154,58 @@
             <!-- Day Cells -->
             @for (dia of dias; track dia; let i = $index) {
               <div class="grid-cell">
+                @if (gapResumo(dia, horario); as gap) {
+                  <!-- Soma dos tempos livres, por cima do "Livre" de baixo do episódio de cima
+                       e do "Livre" de cima do de baixo (só dias úteis, entre dois episódios).
+                       Este card é o que recebe o modal de propaganda do intervalo — e já
+                       mostra as propagandas salvas (📢) com o tempo restante. -->
+                  <div class="gap-bloco absolute left-9 right-10 top-[calc(100%_-_21px)] z-[5] flex items-center justify-center gap-1.5 rounded-md border border-dashed border-gray-300 bg-gray-100 font-mono text-[10px] text-gray-500" [style.height.px]="gapAltura(horario)" [attr.title]="gap.titulo" (click)="abrirGapPropagandas(dia, horario)">
+                    @if (gap.qtd > 0) {
+                      <span class="prop-marca">📢 {{ gap.qtd }}</span>
+                    }
+                    <span>{{ gap.texto }}</span>
+                  </div>
+                }
                 @for (bloco of blocosFor(dia, horario); track bloco.aId) {
-                  <div class="tempo-livre">
+                  <!-- Pré-calculado por card: eram 13 chamadas de getTipoDinamico
+                       (cada uma varre os blocos e o offsetSlot) + 3 de
+                       getDisplayPrograma + 4 dos quadrados "Livre". -->
+                  @let tipo = getTipoDinamico(bloco, dia);
+                  @let progNome = getDisplayPrograma(bloco, dia)?.aNome ?? bloco.aPrograma?.aNome;
+                  @let livreTO = infoTempoLivre(dia, horario, bloco, 'TO');
+                  @let livreBA = infoTempoLivre(dia, horario, bloco, 'BA');
+                  <div class="tempo-livre"
+                       [class.livre-ativo]="livreTO.ativo"
+                       [attr.title]="livreTO.titulo"
+                       (click)="cliqueTempoLivre(bloco, dia, 'TO', horario)">
                     <span>Livre</span>
-                    <span class="font-mono">{{ getTempoLivreTopo(bloco, dia, horario) }}</span>
+                    @if (livreTO.qtd > 0) {
+                      <span class="prop-marca">📢 {{ livreTO.qtd }}</span>
+                    }
+                    <span class="font-mono">{{ livreTO.texto }}</span>
                   </div>
                        <div class="bloco-card"
                        [attr.data-bloco-id]="bloco.aId"
-                       [attr.data-tipo]="getTipoDinamico(bloco, dia).includes('Inédito') ? 'inedito' : getTipoDinamico(bloco, dia).includes('Rep') ? 'reprise' : getTipoDinamico(bloco, dia).includes('Maratona') ? 'maratona' : getTipoDinamico(bloco, dia).includes('Especial') ? 'especial' : 'default'"
+                       [attr.data-tipo]="tipo.includes('Inédito') ? 'inedito' : tipo.includes('Rep') ? 'reprise' : tipo.includes('Maratona') ? 'maratona' : tipo.includes('Especial') ? 'especial' : 'default'"
                        (click)="selectBloco(bloco, dia, horario)">
                     <!-- Card body -->
                     <div class="bloco-body">
                     <!-- Left accent bar -->
                     <div class="bloco-accent-bar"
-                         [class.accent-inedito]="getTipoDinamico(bloco, dia).includes('Inédito')"
-                         [class.accent-reprise]="getTipoDinamico(bloco, dia).includes('Rep')"
-                         [class.accent-maratona]="getTipoDinamico(bloco, dia).includes('Maratona')"
-                         [class.accent-especial]="getTipoDinamico(bloco, dia).includes('Especial')"
-                         [class.accent-default]="!getTipoDinamico(bloco, dia).includes('Inédito') && !getTipoDinamico(bloco, dia).includes('Rep') && !getTipoDinamico(bloco, dia).includes('Maratona') && !getTipoDinamico(bloco, dia).includes('Especial')">
+                         [class.accent-inedito]="tipo.includes('Inédito')"
+                         [class.accent-reprise]="tipo.includes('Rep')"
+                         [class.accent-maratona]="tipo.includes('Maratona')"
+                         [class.accent-especial]="tipo.includes('Especial')"
+                         [class.accent-default]="!tipo.includes('Inédito') && !tipo.includes('Rep') && !tipo.includes('Maratona') && !tipo.includes('Especial')">
                     </div>
                     <div class="bloco-accent-bar-right"></div>
-                      <!-- Program name -->
-                      <p class="prog-nome">
-                        {{ getDisplayPrograma(bloco, dia)?.aNome ?? bloco.aPrograma?.aNome }}
-                      </p>
-                      @if (getEpisodio(bloco, dia); as ep) {
+                      @if (episodiosDoBloco(bloco, dia); as eps) {
+                       @if (eps.length === 1) {
+                        @let ep = eps[0];
+                        <!-- Program name -->
+                        <p class="prog-nome">
+                          {{ progNome }}
+                        </p>
                         <!-- Cover + Episode info -->
                         <div class="flex items-start gap-1.5 mb-1.5">
                           <div class="relative flex-shrink-0" style="width: 24px; height: 32px; min-width: 24px;">
@@ -202,12 +229,12 @@
                             <!-- Meta row -->
                             <div class="bloco-meta-row flex items-center gap-1.5 mt-0.5">
                               <span class="badge"
-                                    [class.badge-inedito]="getTipoDinamico(bloco, dia).includes('Inédito')"
-                                    [class.badge-reprise]="getTipoDinamico(bloco, dia).includes('Rep')"
-                                    [class.badge-maratona]="getTipoDinamico(bloco, dia).includes('Maratona')"
-                                    [class.badge-especial]="getTipoDinamico(bloco, dia).includes('Especial')"
-                                    [class.badge-default]="!getTipoDinamico(bloco, dia).includes('Inédito') && !getTipoDinamico(bloco, dia).includes('Rep') && !getTipoDinamico(bloco, dia).includes('Maratona') && !getTipoDinamico(bloco, dia).includes('Especial')">
-                                {{ getTipoDinamico(bloco, dia) }}
+                                    [class.badge-inedito]="tipo.includes('Inédito')"
+                                    [class.badge-reprise]="tipo.includes('Rep')"
+                                    [class.badge-maratona]="tipo.includes('Maratona')"
+                                    [class.badge-especial]="tipo.includes('Especial')"
+                                    [class.badge-default]="!tipo.includes('Inédito') && !tipo.includes('Rep') && !tipo.includes('Maratona') && !tipo.includes('Especial')">
+                                {{ tipo }}
                               </span>
                               @if (ep.aDuracao) {
                                 <span class="inline-flex items-center gap-0.5 text-[9px] font-mono" style="color: #94a3b8;">
@@ -220,12 +247,53 @@
                             </div>
                           </div>
                         </div>
+                       } @else {
+                        <!-- Bloco multiepisódio: lista compacta com todos os
+                             episódios sequenciais que somam menos de 30 min. -->
+                        <div class="flex items-center gap-1.5 mb-[3px] min-w-0">
+                          <span class="text-[11px] font-semibold leading-[13px] truncate"
+                                style="color:#0f172a;"
+                                [attr.title]="progNome">{{ progNome }}</span>
+                          <!-- Tipo do bloco como ponto colorido (mesmas cores do
+                               badge do bloco único): em bloco multiepisódio o
+                               texto do badge roubaria a largura do nome. -->
+                          <span class="badge ml-auto shrink-0"
+                                style="width:8px; height:8px; padding:0; border-radius:50%; font-size:0; line-height:1;"
+                                [attr.title]="tipo"
+                                [class.badge-inedito]="tipo.includes('Inédito')"
+                                [class.badge-reprise]="tipo.includes('Rep')"
+                                [class.badge-maratona]="tipo.includes('Maratona')"
+                                [class.badge-especial]="tipo.includes('Especial')"
+                                [class.badge-default]="!tipo.includes('Inédito') && !tipo.includes('Rep') && !tipo.includes('Maratona') && !tipo.includes('Especial')"></span>
+                        </div>
+                        <div class="flex min-w-0" style="gap: 6px;">
+                          @for (coluna of colunasPacote(eps); track $index) {
+                            <div class="flex flex-col min-w-0" [class.flex-1]="eps.length > 5">
+                              @for (ep of coluna; track ep.aId) {
+                                <div class="flex items-baseline gap-1.5 min-w-0" [style.height.px]="alturaLinhaPacote(eps.length)" [style.line-height.px]="alturaLinhaPacote(eps.length)">
+                                  <span class="font-mono text-[10px] font-bold shrink-0" style="color:#60a5fa;">{{ epCodigo(ep) }}</span>
+                                  @if (eps.length <= 5 && tituloCurto(ep)) {
+                                    <span class="text-[9px] truncate min-w-0" style="color:#64748b;">{{ tituloCurto(ep) }}</span>
+                                  }
+                                  <span class="font-mono text-[9px] shrink-0 ml-auto" style="color:#94a3b8;">{{ formatDuracao(ep.aDuracao) }}</span>
+                                </div>
+                              }
+                            </div>
+                          }
+                        </div>
+                       }
                       }
                       </div>
                     </div>
-                    <div class="tempo-livre">
+                    <div class="tempo-livre"
+                         [class.livre-ativo]="livreBA.ativo"
+                         [attr.title]="livreBA.titulo"
+                         (click)="cliqueTempoLivre(bloco, dia, 'BA', horario)">
                       <span>Livre</span>
-                      <span class="font-mono">{{ getTempoLivreBaixo(bloco, dia, horario) }}</span>
+                      @if (livreBA.qtd > 0) {
+                        <span class="prop-marca">📢 {{ livreBA.qtd }}</span>
+                      }
+                      <span class="font-mono">{{ livreBA.texto }}</span>
                     </div>
                 }
               </div>
@@ -236,6 +304,7 @@
      [style.width]="'calc((100% - 110px - 48px) / 7 - 18.38px)'"
      [style.top]="nowMinuteFraction() * 100 + '%'"></div>
           </div>
+
         }
 
       </div>
@@ -358,6 +427,10 @@
     </div>
   }
 
+  <!-- ── Propagandas no Tempo Livre: componente proprio (OnPush) para o
+       modal abrir/aceitar teclas sem re-renderizar os cards da grade ── -->
+  <app-propaganda-modal></app-propaganda-modal>
+
   <!-- ── Detail Modal ── -->
   @if (detailOpen() && detailBloco()) {
     <div class="modal-backdrop" (click)="closeDetail()">
@@ -417,12 +490,17 @@
               </div>
               @if (detailEpisodio()!.aDuracao) {
                 <p class="text-[11px] text-gray-500 flex items-center gap-1.5">
-                  <span>⏱</span> Duração: {{ formatDuracao(detailEpisodio()!.aDuracao) }}
+                  <span>⏱</span>
+                  @if (qtdEpisodiosBloco() > 1) {
+                    {{ qtdEpisodiosBloco() }} episódios · Total: {{ getDuracaoBloco() }}
+                  } @else {
+                    Duração: {{ formatDuracao(detailEpisodio()!.aDuracao) }}
+                  }
                 </p>
               }
-              @if (detailEpisodio()!.aParte != null && detailEpisodio()!.aDuracao) {
+              @if ((detailEpisodio()!.aParte != null || qtdEpisodiosBloco() > 1) && detailEpisodio()!.aDuracao) {
                 <p class="text-[11px] font-semibold flex items-center gap-1.5" style="color: rgba(251,191,36,0.8);">
-                  <span>⏳</span> Tempo livre: {{ getTempoLivre(detailEpisodio()!) }}
+                  <span>⏳</span> Tempo livre: {{ getTempoLivreBloco() }}
                 </p>
               }
             </div>

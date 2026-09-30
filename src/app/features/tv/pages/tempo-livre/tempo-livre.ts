@@ -1,6 +1,7 @@
 import { Component, signal, inject, OnInit, ViewChild, ElementRef } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { TvService, BlocoOutput } from '../../services/tv.service';
+import { duracaoPacote, inicioSlot, limparCacheMultiEp, pacoteBloco, sufixoEpisodio } from '../../utils/multi-episodio';
 
 interface EpisodioInfo {
   aId: number;
@@ -18,6 +19,7 @@ interface LinhaTempoLivre {
   horario: string;
   programa: string;
   episodio: EpisodioInfo | null;
+  qtdEps: number;
   duracaoSec: number;
   slots: number;
   topoSec: number;
@@ -128,6 +130,7 @@ export class TempoLivre implements OnInit {
     this.tvService.listPrimeirosEpisodiosPorPrograma(programIds, 10000).subscribe({
       next: (rows) => {
         this.allEpisodiosMap.clear();
+        limparCacheMultiEp();
         const grouped = new Map<number, EpisodioInfo[]>();
         for (const row of rows) {
           const pid = row.aProgramaId;
@@ -144,7 +147,16 @@ export class TempoLivre implements OnInit {
 
         let maxPages = 1;
         for (const [pid, eps] of grouped) {
-          eps.sort((a, b) => ((a.aTemporada ?? 0) - (b.aTemporada ?? 0)) || ((a.aParte ?? 0) - (b.aParte ?? 0)) || ((a.aNumero ?? 0) - (b.aNumero ?? 0)));
+          // MESMA ordem da grade: sem isso o episódio escolhido (e o tempo
+          // livre) divergia da grade mesmo com o mesmo cálculo de índice.
+          const parteVal = (e: EpisodioInfo) => (e.aTitulo && e.aTitulo.toLowerCase().includes('parte')) ? 0 : (e.aParte ?? 0);
+          const numeroVal = (e: EpisodioInfo) => e.aNumero ?? 9999;
+          const isInterleaved = pid === 7 || pid === 47 || pid === 48 || pid === 74;
+          if (isInterleaved) {
+            eps.sort((a, b) => ((a.aTemporada ?? 0) - (b.aTemporada ?? 0)) || (numeroVal(a) - numeroVal(b)) || (parteVal(a) - parteVal(b)));
+          } else {
+            eps.sort((a, b) => ((a.aTemporada ?? 0) - (b.aTemporada ?? 0)) || (parteVal(a) - parteVal(b)) || (numeroVal(a) - numeroVal(b)));
+          }
           this.allEpisodiosMap.set(pid, eps);
           const diasQuePassa = this.diasProgramaMap.get(pid) ?? [];
           const hasWeekend = diasQuePassa.some(d => d === 5 || d === 6);
@@ -188,7 +200,20 @@ export class TempoLivre implements OnInit {
     if (!diasQuePassa || diasQuePassa.length === 0) return null;
     const dayPosition = diasQuePassa.indexOf(diaIdx);
     if (dayPosition < 0) return null;
-    return eps[(dayPosition + page * this.EPISODES_PER_PAGE) % eps.length];
+    // Mesma fórmula da grade: o bloco consome os episódios que exibe
+    // (multiepisódio), então o índice avança pelo total mostrado.
+    const idx = inicioSlot(`ep-${bloco.aPrograma.aId}`, eps, page, dayPosition, diasQuePassa.length);
+    return eps[idx];
+  }
+
+  /** Episódios do bloco (mais de 1 quando somam menos de 30 min). */
+  private pacoteFor(bloco: BlocoOutput, ep: EpisodioInfo | null): EpisodioInfo[] {
+    if (!ep) return [];
+    const eps = bloco.aPrograma ? this.allEpisodiosMap.get(bloco.aPrograma.aId) : null;
+    if (!eps || eps.length === 0) return [ep];
+    const idx = eps.indexOf(ep);
+    if (idx < 0) return [ep];
+    return pacoteBloco(eps, idx);
   }
 
   get rows(): LinhaTempoLivre[] {
@@ -205,10 +230,15 @@ export class TempoLivre implements OnInit {
 
       const progNome = b.aPrograma.aNome;
       const ep = this.episodioFor(b, diaIdx, page);
-      const hay = this.normalizeDia(`${progNome} ${ep?.aTitulo ?? ''} E${ep?.aNumero ?? ''}`);
+      const pacote = this.pacoteFor(b, ep);
+      const hay = this.normalizeDia(
+        `${progNome} ${pacote.map(e => `${e.aTitulo ?? ''} E${e.aNumero ?? ''}`).join(' ')}`,
+      );
       if (search !== '' && !hay.includes(search)) continue;
 
-      const duracaoSec = this.parseDuracaoSec(ep?.aDuracao ?? null);
+      // Bloco multiepisódio: a duração é a soma de todos os episódios do
+      // bloco (30 min − soma = tempo livre, igual à grade).
+      const duracaoSec = pacote.length > 0 ? duracaoPacote(pacote) : 0;
       const isMulti = duracaoSec > 30 * 60 && b.aPrograma.aId !== 35;
       const slots = Math.max(1, Math.ceil(duracaoSec / (30 * 60)));
       const totalSec = Math.max(0, slots * 30 * 60 - duracaoSec);
@@ -221,6 +251,7 @@ export class TempoLivre implements OnInit {
         horario: b.aHorario.substring(0, 5),
         programa: progNome,
         episodio: ep,
+        qtdEps: pacote.length,
         duracaoSec,
         slots,
         topoSec: Math.floor(totalSec / 2),
@@ -307,7 +338,7 @@ export class TempoLivre implements OnInit {
     if (!ep) return '—';
     const parts: string[] = [];
     if (ep.aTemporada) parts.push(`T${ep.aTemporada}`);
-    if (ep.aNumero) parts.push(`E${ep.aNumero}`);
+    if (ep.aNumero) parts.push(`E${ep.aNumero}${sufixoEpisodio(ep.aNumero, ep.aTitulo)}`);
     return parts.length > 0 ? parts.join(' ') : '—';
   }
 }

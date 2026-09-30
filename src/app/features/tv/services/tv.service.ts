@@ -78,6 +78,13 @@ export interface PaginatedBlocos {
   aBlocos: BlocoOutput[];
 }
 
+export interface PaginatedArquivos {
+  aCurrentPage: number;
+  aPerPage: number;
+  aTotal: number;
+  aArquivos: ArquivoOutput[];
+}
+
 export interface PaginatedGrades {
   aCurrentPage: number;
   aPerPage: number;
@@ -199,6 +206,16 @@ export class TvService {
 
   createBloco(data: { aProgramaId: number; aHorario: string; aGradeId: number; aDiaSemanaCode: string; aFaixaHorarioCode: string; aTipoBlocoCode: string }): Observable<any> {
     return this.http.post(`${this.baseUrl}/bloco`, data);
+  }
+
+  listArquivos(page: number, size: number, search: string = ''): Observable<PaginatedArquivos> {
+    let params = new HttpParams()
+      .set('page', page.toString())
+      .set('size', size.toString())
+      .set('sort', 'nome')
+      .set('direction', 'asc');
+    if (search) params = params.set('search', search);
+    return this.http.get<PaginatedArquivos>(`${this.baseUrl}/arquivo`, { params });
   }
 
   deleteBloco(id: number): Observable<any> {

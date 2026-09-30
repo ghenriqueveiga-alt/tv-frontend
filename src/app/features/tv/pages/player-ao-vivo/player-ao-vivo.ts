@@ -6,6 +6,7 @@ import { LinhaVermelhaService } from '../../services/linha-vermelha.service';
 import { PlayerService } from '../../../player/services/player.service';
 import { ServerTimeService } from '../../../../core/services/server-time.service';
 import { Subscription } from 'rxjs';
+import { duracaoPacote, inicioSlot, limparCacheMultiEp, pacoteBloco } from '../../utils/multi-episodio';
 
 interface EpisodioInfo {
   aId: number;
@@ -188,6 +189,21 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
   /** Episódio do qual o vídeo carregado veio (detecta troca de página na grade). */
   private _videoEpId: number | null = null;
 
+  // ---- Sincronização da "borda ao vivo" e recuperação de travamento ----
+  /** Último salto de sincronização (evita salto em cadeia). */
+  private lastEdgeSyncAt = 0;
+  /** Momento da última mudança real de posição do vídeo. */
+  private lastProgressAt = 0;
+  private lastProgressPos = -1;
+  private recoverAttempts = 0;
+  private nextRecoverAt = 0;
+  /** O vídeo já andou alguma coisa (distingue primeira carga de travamento). */
+  private videoStarted = false;
+  /** Para onde recuar quando o vídeo é recarregado (em vez do offset do bloco). */
+  private recoverySeek: number | null = null;
+  /** Próximo `loadeddata` é o primeiro do vídeo: aplica o offset do bloco. */
+  private initialLoadPending = false;
+
   readonly qrModalOpen = signal(false);
   readonly selectedQr = signal<{ name: string; color: string } | null>(null);
 
@@ -321,7 +337,12 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
           const dayPos = diasQ.indexOf(dIdx);
           if (dayPos < 0) continue;
           const slip = slipRun.get(bloco.aPrograma.aId) ?? 0;
-          const idx = (((dayPos + p * this.EPISODES_PER_PAGE - slip) % eps.length) + eps.length) % eps.length;
+          // Fim de semana mantém o índice antigo (um card por célula, sem
+          // empacotamento); de segunda a sexta o bloco consome o que exibe.
+          const base = this.isFimDeSemana(dia)
+            ? dayPos + p * this.EPISODES_PER_PAGE
+            : inicioSlot(`ep-${bloco.aPrograma.aId}`, eps, p, dayPos, diasQ.length || this.EPISODES_PER_PAGE);
+          const idx = (((base - slip) % eps.length) + eps.length) % eps.length;
           const ep = eps[idx];
           if (!ep || !ep.aDuracao || this.parseDurationSec(ep.aDuracao) <= 30 * 60) continue;
           const need = Math.ceil(this.parseDurationSec(ep.aDuracao) / (30 * 60));
@@ -431,6 +452,7 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     this._timerInterval = setInterval(() => {
       this.currentTime.set(this.nowDate());
       this.updateCurrentBloco();
+      this.watchdog();
     }, 1000);
 
     this._linhaSub = this.linhaService.mudanca$.subscribe(() => {
@@ -522,6 +544,7 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
         this.tvService.listPrimeirosEpisodiosPorPrograma(programIds, 10000).subscribe({
           next: (rows) => {
             this.allEpisodiosMap.clear();
+            limparCacheMultiEp();
             const grouped = new Map<number, EpisodioInfo[]>();
             for (const row of rows) {
               const pid = row.aProgramaId;
@@ -665,7 +688,12 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     const segundosNoBloco = this.linhaService.segundosDentroBloco();
     const epLive = this.episodioAlvo(bloco, dia);
     this.currentEpisodio.set(epLive);
-    const topFree = this.getTopFreeSeconds();
+    // Bloco multiepisódio: o tempo livre é 30 min − soma de TODOS os
+    // episódios do bloco (não só do que está no ar agora).
+    const pacote = this.pacoteDoBloco(bloco, dia);
+    const multiEp = pacote.length > 1;
+    const somaPacote = multiEp ? duracaoPacote(pacote) : 0;
+    const topFree = multiEp ? Math.floor((30 * 60 - somaPacote) / 2) : this.getTopFreeSeconds();
 
     const ep = this.currentEpisodio();
     const slotIdx = ep ? this.slotIndex() : 0;
@@ -686,7 +714,10 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
       seekBase = elapsedFromFirst;
     }
     const adjustedSeek = seekBase - topFree;
-    this.seekSeconds.set(adjustedSeek > 0 ? adjustedSeek : 0);
+    // No multiepisódio o vídeo do episódio atual começa em 0: o seek é a
+    // posição no timeline concatenado menos onde este episódio começou.
+    const inicioEp = multiEp ? this.inicioDoEpisodio(pacote, epLive) : 0;
+    this.seekSeconds.set(Math.max(0, adjustedSeek - inicioEp));
 
     if (adjustedSeek < 0) {
       const desde = this.linhaService.desde();
@@ -701,8 +732,10 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     }
 
     const epDuracao = this.currentEpisodio()?.aDuracao;
-    const episodeSec = epDuracao ? this.parseDurationSec(epDuracao) : 0;
-    const bottomFree = this.getBottomFreeSeconds();
+    // No multiepisódio o "fim" é o fim de TODOS os episódios: entre um e
+    // outro o fluxo troca de vídeo (epMudou) em vez de entrar em espera.
+    const episodeSec = multiEp ? somaPacote : (epDuracao ? this.parseDurationSec(epDuracao) : 0);
+    const bottomFree = multiEp ? Math.ceil((30 * 60 - somaPacote) / 2) : this.getBottomFreeSeconds();
     if (bottomFree > 0 && adjustedSeek >= episodeSec) {
       this.waitSeconds.set(0);
       this.waitingForNext.set(true);
@@ -749,14 +782,88 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
   /**
    * Episódio que este bloco deve exibir na página vigente: o da grade
    * (episodioPagina0) com o fallback do índice por dia, igual ao cálculo
-   * que alimenta o texto na tela.
+   * que alimenta o texto na tela. Em bloco multiepisódio devolve o episódio
+   * que está no AR AGORA — o bloco roda vários episódios em sequência.
    */
   private episodioAlvo(bloco: BlocoOutput, dia: string): EpisodioInfo | null {
+    const pacote = this.pacoteDoBloco(bloco, dia);
+    if (pacote.length > 1) {
+      const soma = duracaoPacote(pacote);
+      const topFree = Math.floor((30 * 60 - soma) / 2);
+      return this.episodioNaPosicao(pacote, this.seekBaseBloco(bloco) - topFree);
+    }
     const ep = this.episodioPagina0(bloco, this.dias.indexOf(dia));
     if (ep) return ep;
     const eps = bloco.aPrograma ? this.allEpisodiosMap.get(bloco.aPrograma.aId) : null;
     if (eps && eps.length > 0) return eps[this.getEpisodeIndex(bloco, dia) % eps.length];
     return null;
+  }
+
+  /**
+   * Bloco multiepisódio: todos os episódios sequenciais que somam menos de
+   * 30 min (mesmo cálculo da grade). Fora disso, o bloco tem 1 episódio.
+   */
+  private pacoteDoBloco(bloco: BlocoOutput, dia: string): EpisodioInfo[] {
+    const ep = this.episodioPagina0(bloco, this.dias.indexOf(dia));
+    if (!ep) return [];
+    if (!this.ehEmpacotavel(bloco)) return [ep];
+    const eps = bloco.aPrograma ? this.allEpisodiosMap.get(bloco.aPrograma.aId) : null;
+    if (!eps || eps.length === 0) return [ep];
+    const idx = eps.indexOf(ep);
+    if (idx < 0) return [ep];
+    return pacoteBloco(eps, idx);
+  }
+
+  /** Sequências flat (Cavaleiros 19:00, DB 18:00...) e fim de semana seguem
+   *  um episódio por bloco — o índice deles não avança por consumo. */
+  private ehEmpacotavel(bloco: BlocoOutput): boolean {
+    if (this.isFimDeSemana(bloco.aDiaSemanaDesc ?? '')) return false;
+    return !(this.isBokuWeekend18Horario(bloco) || this.isMedabots1130Horario(bloco)
+      || this.isDigimon1230Horario(bloco) || this.isBaki21Horario(bloco)
+      || this.isAvatar11Horario(bloco) || this.isCavaleiros19Horario(bloco)
+      || this.isDragonBall18Horario(bloco));
+  }
+
+  /** Episódio do pacote que cobre a posição `pos` (segundos desde o 1º). */
+  private episodioNaPosicao(pacote: EpisodioInfo[], pos: number): EpisodioInfo {
+    if (pos < 0) return pacote[0];
+    let acc = 0;
+    for (const e of pacote) {
+      const d = this.parseDurationSec(e.aDuracao ?? null);
+      if (d <= 0) return e;
+      if (pos < acc + d) return e;
+      acc += d;
+    }
+    return pacote[pacote.length - 1];
+  }
+
+  /** Onde o episódio `ep` começa dentro do pacote (segundos desde o 1º). */
+  private inicioDoEpisodio(pacote: EpisodioInfo[], ep: EpisodioInfo | null): number {
+    if (!ep) return 0;
+    let acc = 0;
+    for (const e of pacote) {
+      if (e.aId === ep.aId) return acc;
+      acc += this.parseDurationSec(e.aDuracao ?? null);
+    }
+    return 0;
+  }
+
+  /** Segundos desde o início do bloco (mesmas fontes do seek), SEM offset de
+   *  multibloco: um bloco multiepisódio cabe sempre num único slot de 30 min. */
+  private seekBaseBloco(bloco: BlocoOutput): number {
+    const now = this.currentTime();
+    const blocoStart = (bloco.aHorario ?? '00:00').substring(0, 5);
+    const [bh, bm] = blocoStart.split(':').map(Number);
+    const blocoTotalSeconds = bh * 3600 + bm * 60;
+    const overrideSlot = this.linhaService.slot();
+    if (overrideSlot && overrideSlot !== blocoStart) {
+      const [oh, om] = overrideSlot.split(':').map(Number);
+      const slotMinutes = om < 30 ? 0 : 30;
+      const slotIdx2 = (oh * 60 + slotMinutes) / 30 - (bh * 60 + bm) / 30;
+      return slotIdx2 * 30 * 60 + (om % 30) * 60;
+    }
+    if (overrideSlot) return this.linhaService.segundosDentroBloco();
+    return now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds() - blocoTotalSeconds;
   }
 
   private loadProgramaDetalhe(programaId: number): void {
@@ -786,18 +893,17 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
   private loadVideo(programaId: number, dia: string): void {
     const bloco = this.currentBloco();
     if (!bloco) return;
-    const diaIdx = this.dias.indexOf(dia);
-    const flatEp = this.episodioPagina0(bloco, diaIdx);
-    let ep: EpisodioInfo | null = flatEp;
-    if (!ep) {
-      const eps = this.allEpisodiosMap.get(programaId);
-      if (!eps || eps.length === 0) return;
-      const epIdx = this.getEpisodeIndex(bloco, dia);
-      ep = eps[epIdx % eps.length];
-    }
+    // episodioAlvo já resolve o bloco multiepisódio (devolve o episódio que
+    // está no ar agora) e mantém o fallback do índice por dia.
+    const ep = this.episodioAlvo(bloco, dia);
     if (!ep) return;
 
     this._videoEpId = ep.aId;
+    this.recoverySeek = null;
+    this.initialLoadPending = true;
+    this.videoStarted = false;
+    this.lastProgressPos = -1;
+    this.lastProgressAt = 0;
     this.videoUrl.set(null);
 
     this.playerService.getEpisodio(ep.aId).subscribe({
@@ -870,8 +976,11 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     const diasQ = this.diasProgramaMap.get(programmaId) ?? [];
     const dayPos = diasQ.indexOf(diaIdx);
     if (dayPos < 0) return null;
+    // O bloco consome os episódios que exibe (multiepisódio): o índice avança
+    // pelo total mostrado nos blocos anteriores — mesma fórmula da grade.
+    const base = inicioSlot(`ep-${programmaId}`, eps, pag, dayPos, diasQ.length || this.EPISODES_PER_PAGE);
     const slip = this.contarDeslocamentosAntes(programmaId, pag, diaIdx);
-    return eps[(((dayPos + pag * this.EPISODES_PER_PAGE - slip) % eps.length) + eps.length) % eps.length];
+    return eps[(((base - slip) % eps.length) + eps.length) % eps.length];
   }
 
   private getEpisodeIndex(bloco: BlocoOutput, dia: string): number {
@@ -934,75 +1043,175 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
 
   onVideoLoaded(): void {
     const video = this.videoRef?.nativeElement;
-    if (video) {
-      if (this._suppressAutoPlay || this.videoEnded()) {
-        video.pause();
-        return;
-      }
-      this.videoEnded.set(false);
-      this.suppressSeekGuard = true;
-      const offset = this.initialSeekOffset;
-      this.initialSeekOffset = 0;
-      const seekPos = offset > 0 ? offset : this.seekSeconds();
-      this.liveBase = seekPos;
-      this.tuneInAt = Date.now();
-      video.currentTime = seekPos;
-      video.muted = this.isMuted();
-      video.volume = this.volume();
-      const playPromise = video.play();
-      if (playPromise) {
-        playPromise.catch(() => {
-          video.muted = true;
-          this.isMuted.set(true);
-          video.play().catch(() => {});
-        });
-      }
-      setTimeout(() => (this.suppressSeekGuard = false), 500);
+    if (!video) return;
+    if (this._suppressAutoPlay || this.videoEnded()) {
+      video.pause();
+      return;
     }
+    this.videoEnded.set(false);
+    this.suppressSeekGuard = true;
+
+    const offset = this.initialSeekOffset;
+    this.initialSeekOffset = 0;
+    const recuperando = this.recoverySeek;
+    const posicao = recuperando !== null ? recuperando : offset > 0 ? offset : this.seekSeconds();
+
+    // Só reposiciona no primeiro carregamento, numa recuperação de travamento
+    // ou num seek explícito: um `loadeddata` tardio reaplicaria o offset de
+    // quando o bloco começou e rebobinaria o vídeo do zero.
+    if (this.initialLoadPending || recuperando !== null || offset > 0) {
+      this.initialLoadPending = false;
+      this.recoverySeek = null;
+      this.liveBase = posicao;
+      this.tuneInAt = Date.now();
+      this.lastEdgeSyncAt = 0;
+      video.currentTime = posicao;
+    }
+
+    video.muted = this.isMuted();
+    video.volume = this.volume();
+    const playPromise = video.play();
+    if (playPromise) {
+      playPromise.catch(() => {
+        video.muted = true;
+        this.isMuted.set(true);
+        video.play().catch(() => {});
+      });
+    }
+    setTimeout(() => (this.suppressSeekGuard = false), 500);
   }
 
-  private liveEdge(): number {
+  /** Posição que o vídeo deveria ocupar pelo relógio da grade. */
+  private wallEdge(): number {
     const video = this.videoRef?.nativeElement;
-    const elapsed = (Date.now() - this.tuneInAt) / 1000;
-    let edge = this.liveBase + Math.max(0, elapsed);
+    const elapsed = this.tuneInAt ? Math.max(0, (Date.now() - this.tuneInAt) / 1000) : 0;
+    let edge = this.liveBase + elapsed;
     if (video && isFinite(video.duration) && video.duration > 0) {
       edge = Math.min(edge, video.duration);
     }
     return Math.max(0, edge);
   }
 
-  onSeeking(): void {
+  /** Fim do trecho que o navegador já baixou (ou a própria posição, se vazio). */
+  private bufferedEnd(video: HTMLVideoElement): number {
+    try {
+      const b = video.buffered;
+      for (let i = 0; i < b.length; i++) {
+        if (video.currentTime >= b.start(i) - 1 && video.currentTime <= b.end(i)) return b.end(i);
+      }
+      if (b.length > 0) return b.end(b.length - 1);
+    } catch {}
+    return video.currentTime;
+  }
+
+  /**
+   * Aproxima o vídeo da borda da grade SEM sair do que já foi baixado. Saltar
+   * para um ponto sem dados (ou saltar de novo a cada `playing`) prendia o
+   * elemento numa busca que nunca terminava — era o travamento na tela.
+   */
+  private syncToEdge(): void {
     const video = this.videoRef?.nativeElement;
-    if (!video || this.suppressSeekGuard || !this.tuneInAt) return;
-    const edge = this.liveEdge();
-    if (Math.abs(video.currentTime - edge) > 2) {
-      this.suppressSeekGuard = true;
-      try {
-        video.currentTime = edge;
-      } catch {}
-      setTimeout(() => (this.suppressSeekGuard = false), 400);
-    }
+    if (!video || !this.tuneInAt || this.suppressSeekGuard) return;
+    const wall = this.wallEdge();
+    const atraso = wall - video.currentTime;
+    if (atraso <= 3) return;
+    const alvo = Math.min(wall, this.bufferedEnd(video) - 0.5);
+    if (alvo - video.currentTime <= 2) return;
+    const agora = Date.now();
+    if (agora - this.lastEdgeSyncAt < 3000) return;
+    this.lastEdgeSyncAt = agora;
+    this.suppressSeekGuard = true;
+    try {
+      video.currentTime = alvo;
+    } catch {}
+    setTimeout(() => (this.suppressSeekGuard = false), 400);
+  }
+
+  onSeeking(): void {
+    this.syncToEdge();
   }
 
   onPlayState(playing: boolean): void {
     this.isPlaying.set(playing);
-    if (playing) {
-      const video = this.videoRef?.nativeElement;
-      if (video && this.tuneInAt && !this.suppressSeekGuard) {
-        const edge = this.liveEdge();
-        if (edge - video.currentTime > 2) {
-          this.suppressSeekGuard = true;
-          try {
-            video.currentTime = edge;
-          } catch {}
-          setTimeout(() => (this.suppressSeekGuard = false), 400);
-        }
-      }
+    if (playing) this.syncToEdge();
+  }
+
+  onVideoError(): void {
+    if (!this.videoUrl() || this.videoEnded()) return;
+    this.recoverPlayback();
+  }
+
+  /**
+   * Roda a cada segundo: se o vídeo parar de avançar (rede caiu, busca que não
+   * termina, elemento pausado sozinho), tenta retomar e, na falta de progresso,
+   * recarrega o arquivo a partir da borda da grade.
+   */
+  private watchdog(): void {
+    if (!this.videoUrl()) {
+      this.lastProgressPos = -1;
+      this.lastProgressAt = 0;
+      this.recoverAttempts = 0;
+      this.videoStarted = false;
+      return;
     }
+    if (this.videoEnded() || this.freeGapActive) return;
+    const video = this.videoRef?.nativeElement;
+    if (!video) return;
+    // Aba ociosa: o navegador pode suspender a reprodução e não é travamento.
+    if (document.hidden) {
+      this.lastProgressPos = -1;
+      this.lastProgressAt = 0;
+      return;
+    }
+
+    const agora = Date.now();
+    const pos = video.currentTime;
+    if (pos !== this.lastProgressPos) {
+      this.lastProgressPos = pos;
+      this.lastProgressAt = agora;
+      if (pos > 0) this.videoStarted = true;
+      if (agora > this.nextRecoverAt) this.recoverAttempts = 0;
+    } else if (!this.lastProgressAt) {
+      this.lastProgressAt = agora;
+    } else if (agora - this.lastProgressAt >= (this.videoStarted ? 8000 : 20000)) {
+      this.recoverPlayback();
+      return;
+    }
+
+    if (video.paused) {
+      if (this.videoStarted) video.play().catch(() => {});
+      return;
+    }
+    this.syncToEdge();
+  }
+
+  private recoverPlayback(): void {
+    const video = this.videoRef?.nativeElement;
+    if (!video) return;
+    const agora = Date.now();
+    if (agora < this.nextRecoverAt) return;
+
+    if (this.recoverAttempts >= 3) {
+      this.recoverAttempts = 0;
+      this.nextRecoverAt = agora + 30000;
+    } else {
+      this.recoverAttempts++;
+      this.nextRecoverAt = agora + 5000;
+    }
+
+    // Recarrega o MESMO arquivo apontando para a borda da grade: reaplicar o
+    // offset do bloco rebobinaria o vídeo para o começo dele.
+    this.recoverySeek = this.wallEdge();
+    this.lastProgressAt = agora;
+    this.lastProgressPos = video.currentTime;
+    try {
+      video.load();
+    } catch {}
   }
 
   onPauseBlocked(): void {
-    if (this.videoEnded() || this._suppressAutoPlay) return;
+    // Pausa intencional (fim do conteúdo, espera do próximo bloco): não luta.
+    if (this.videoEnded() || this._suppressAutoPlay || this.freeGapActive) return;
     this.isPlaying.set(true);
     const video = this.videoRef?.nativeElement;
     if (video && video.paused) {
@@ -1025,6 +1234,43 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     const now = this.currentTime();
     const intoSlot = (now.getMinutes() % 30) * 60 + now.getSeconds();
     return Math.max(0, 30 * 60 - intoSlot);
+  }
+
+  /**
+   * Um único slate para o intervalo: cobre do fim do conteúdo do bloco atual
+   * até o início do conteúdo do próximo, somando os dois tempos livres.
+   */
+  get freeGapActive(): boolean {
+    return this.waitSeconds() > 0 || this.waitingForNext() || (this.videoEnded() && !!this.videoUrl());
+  }
+
+  /** Segundos restantes do slate único (fim deste bloco + início do próximo). */
+  get freeGapSec(): number {
+    if (this.waitSeconds() > 0) return this.waitSeconds();
+    const prox = this.nextBloco;
+    return prox ? this.freeCountdownSec + this.topFreeDoBloco(prox) : this.freeCountdownSec;
+  }
+
+  /** Bloco que entra no ar quando a contagem do slate chegar a zero. */
+  get blocoProximoSlate(): BlocoOutput | null {
+    return this.waitSeconds() > 0 ? this.currentBloco() : this.nextBloco;
+  }
+
+  get episodioProximoSlate(): EpisodioInfo | null {
+    const bloco = this.blocoProximoSlate;
+    if (!bloco?.aDiaSemanaDesc) return null;
+    return this.episodioAlvo(bloco, bloco.aDiaSemanaDesc);
+  }
+
+  /** Tempo livre no topo de um bloco: metade do que sobra do slot. */
+  private topFreeDoBloco(bloco: BlocoOutput): number {
+    const pacote = this.pacoteDoBloco(bloco, bloco.aDiaSemanaDesc ?? this.diaAlvo().dia);
+    if (pacote.length === 0) return 0;
+    const soma =
+      pacote.length > 1 ? duracaoPacote(pacote) : this.parseDurationSec(pacote[0].aDuracao ?? null);
+    if (soma <= 0) return 0;
+    const slots = Math.max(1, Math.ceil(soma / (30 * 60)));
+    return Math.floor(Math.max(0, slots * 30 * 60 - soma) / 2);
   }
 
   togglePlay(): void {
