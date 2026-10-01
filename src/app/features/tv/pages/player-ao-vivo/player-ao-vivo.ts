@@ -5,8 +5,11 @@ import { TvService, BlocoOutput, ProgramaDetalhe } from '../../services/tv.servi
 import { LinhaVermelhaService } from '../../services/linha-vermelha.service';
 import { PlayerService } from '../../../player/services/player.service';
 import { ServerTimeService } from '../../../../core/services/server-time.service';
-import { Subscription } from 'rxjs';
+import { Subscription, forkJoin } from 'rxjs';
+import { PropagandaService, PropagandaOutput, PropagandaPosicaoCode } from '../../services/propaganda.service';
 import { duracaoPacote, inicioSlot, limparCacheMultiEp, pacoteBloco } from '../../utils/multi-episodio';
+import { environment } from '../../../../../environments/environment';
+import { qrDataUrl as gerarQrDataUrl } from '../../../../core/utils/qr';
 
 interface EpisodioInfo {
   aId: number;
@@ -15,6 +18,23 @@ interface EpisodioInfo {
   aParte: number | null;
   aTitulo: string | null;
   aDuracao?: string | null;
+}
+
+/** Janela de propaganda do intervalo: metade do tempo livre centrada na soma
+ *  das durações. `gapTotal` é congelado no momento em que o slate abre. */
+interface AdWindow {
+  gapTotal: number;
+  winStart: number;
+  winEnd: number;
+  itens: PropagandaOutput[];
+}
+
+/** Carteira de doação exibida nos cards laterais e no modal de QR. */
+export interface DonationCoin {
+  key: string;
+  name: string;
+  color: string;
+  address: string;
 }
 
 @Component({
@@ -204,16 +224,47 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
   /** Próximo `loadeddata` é o primeiro do vídeo: aplica o offset do bloco. */
   private initialLoadPending = false;
 
-  readonly qrModalOpen = signal(false);
-  readonly selectedQr = signal<{ name: string; color: string } | null>(null);
+  // ---- Doação em cripto: cards laterais + modal de QR ----
+  readonly donationCoins: DonationCoin[] = [
+    { key: 'bitcoin', name: 'Bitcoin', color: '#F7931A', address: environment.donations.bitcoin },
+    { key: 'ethereum', name: 'Ethereum', color: '#627EEA', address: environment.donations.ethereum },
+    { key: 'binance', name: 'Binance', color: '#F0B90B', address: environment.donations.binance },
+    { key: 'solana', name: 'Solana', color: '#9945FF', address: environment.donations.solana },
+    { key: 'litecoin', name: 'Litecoin', color: '#BFBBBB', address: environment.donations.litecoin },
+    { key: 'monero', name: 'Monero', color: '#FF6600', address: environment.donations.monero },
+  ];
+  readonly leftCoins = this.donationCoins.slice(0, 3);
+  readonly rightCoins = this.donationCoins.slice(3);
+  /** QR do endereço como data URL (cache global por endereço). */
+  readonly qrDataUrl = gerarQrDataUrl;
 
-  openQrModal(name: string, color: string): void {
-    this.selectedQr.set({ name, color });
+  readonly qrModalOpen = signal(false);
+  readonly selectedQr = signal<DonationCoin | null>(null);
+  readonly copiedAddress = signal<string | null>(null);
+
+  openQrModal(coin: DonationCoin): void {
+    this.selectedQr.set(coin);
     this.qrModalOpen.set(true);
   }
 
   closeQrModal(): void {
     this.qrModalOpen.set(false);
+  }
+
+  async copiarEndereco(address: string): Promise<void> {
+    if (!address) return;
+    try {
+      await navigator.clipboard.writeText(address);
+    } catch {
+      const textarea = document.createElement('textarea');
+      textarea.value = address;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
+    this.copiedAddress.set(address);
+    setTimeout(() => this.copiedAddress.set(null), 2000);
   }
 
   private _timerInterval: any;
@@ -453,6 +504,7 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
       this.currentTime.set(this.nowDate());
       this.updateCurrentBloco();
       this.watchdog();
+      this.tickPropaganda();
     }, 1000);
 
     this._linhaSub = this.linhaService.mudanca$.subscribe(() => {
@@ -462,6 +514,14 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
       if (pag !== this._lastPagina) {
         this._lastPagina = pag;
         if (this.allEpisodiosMap.size > 0) this.computeSlipCascade(pag);
+        // Propaganda é por página da grade: a janela aberta (e a lista dentro
+        // dela) passa a valer para a nova página.
+        this.adToken++;
+        this.adWindow.set(null);
+        this.adLados = null;
+        this.adGapTotal = 0;
+        this.adForce = true;
+        this.tickPropaganda();
       }
       this.updateCurrentBloco();
     });
@@ -469,11 +529,21 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     document.addEventListener('fullscreenchange', this.fsChangeHandler);
     document.addEventListener('click', this.docClickHandler);
     this.loadBlocos();
+
+    // Pub/sub: a grade avisa quando criar/editar/remover propaganda.
+    this.sseSub = this.propagandaService.atualizacoes().subscribe(evt => {
+      this.sseAtivo = evt.conectado;
+      if (evt.mudou && this.freeGapActive) {
+        this.adForce = true;
+        this.tickPropaganda();
+      }
+    });
   }
 
   ngOnDestroy(): void {
     if (this._timerInterval) clearInterval(this._timerInterval);
     this._linhaSub?.unsubscribe();
+    this.sseSub?.unsubscribe();
     document.removeEventListener('fullscreenchange', this.fsChangeHandler);
     document.removeEventListener('click', this.docClickHandler);
     if (this.fsIdleTimer) clearTimeout(this.fsIdleTimer);
@@ -1236,6 +1306,26 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     return Math.max(0, 30 * 60 - intoSlot);
   }
 
+  // ---- Janela de propaganda no slate de intervalo ----
+  private readonly propagandaService = inject(PropagandaService);
+  readonly adWindow = signal<AdWindow | null>(null);
+  private adPending = false;
+  /** Invalida respostas de fetch quando o slate se fecha. */
+  private adToken = 0;
+  /** Rebusca agendada (fallback quando o canal SSE está fora), em ms. */
+  private readonly adRefreshMs = 3000;
+  private adLastFetchAt = 0;
+  /** Um aviso do SSE pediu rebusca imediata. */
+  private adForce = false;
+  /** A última rebusca falhou: continua no fallback mesmo com SSE aberto. */
+  private adErroFetch = false;
+  /** Canal SSE de propaganda ligado (pub/sub no lugar do polling). */
+  private sseAtivo = false;
+  private sseSub?: Subscription;
+  /** Lados e total do gap congelados na abertura do slate. */
+  private adLados: { blocoId: number; posicao: PropagandaPosicaoCode }[] | null = null;
+  private adGapTotal = 0;
+
   /**
    * Um único slate para o intervalo: cobre do fim do conteúdo do bloco atual
    * até o início do conteúdo do próximo, somando os dois tempos livres.
@@ -1271,6 +1361,145 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     if (soma <= 0) return 0;
     const slots = Math.max(1, Math.ceil(soma / (30 * 60)));
     return Math.floor(Math.max(0, slots * 30 * 60 - soma) / 2);
+  }
+
+  /**
+   * Abre/atualiza/fecha a janela de propaganda do slate: ao entrar no intervalo
+   * congela lados (BA do bloco atual + TO do próximo; só TO quando o slate é de
+   * espera antes do conteúdo) e a duração total, e busca as propagandas —
+   * rebuscando a cada `adRefreshMs` enquanto o slate está aberto, para o que a
+   * grade cadastrar ou remover em tempo de intervalo valer na hora.
+   */
+  private tickPropaganda(): void {
+    if (!this.freeGapActive) {
+      if (this.adWindow() || this.adPending) this.adToken++;
+      this.adWindow.set(null);
+      this.adPending = false;
+      this.adForce = false;
+      this.adErroFetch = false;
+      this.adLados = null;
+      this.adGapTotal = 0;
+      this.adLastFetchAt = 0;
+      return;
+    }
+    if (this.adPending) return;
+
+    if (!this.adLados) {
+      const lados = this.calcularLadosGap();
+      if (!lados) return; // sem bloco definido ainda: tenta no próximo tick
+      this.adLados = lados;
+      this.adGapTotal = this.freeGapSec;
+    }
+
+    const agora = Date.now();
+    if (this.adWindow() && !this.adForce) {
+      // Com o canal SSE aberto a lista só muda por aviso do backend; sem ele
+      // (ou depois de uma rebusca falhar) cai no fallback de adRefreshMs.
+      const fallback = !this.sseAtivo || this.adErroFetch;
+      if (!fallback) return;
+      if (agora - this.adLastFetchAt < this.adRefreshMs) return;
+    }
+    this.adForce = false;
+    this.adLastFetchAt = agora;
+
+    const token = ++this.adToken;
+    this.adPending = true;
+    forkJoin(this.adLados.map(l => this.propagandaService.list(l.blocoId, l.posicao, this.paginaAlvo()))).subscribe({
+      next: respostas => {
+        this.adPending = false;
+        if (token !== this.adToken || !this.freeGapActive) return;
+        this.adErroFetch = false;
+        // Lados vêm na ordem do gap (BA do atual, depois TO do próximo):
+        // ordena só dentro de cada lado, senão as filas se misturam.
+        const itens = respostas
+          .flatMap(r => [...(r.aPropagandas ?? [])].sort((a, b) => (a.aOrdem ?? 0) - (b.aOrdem ?? 0)))
+          .filter(p => (p.aDuracaoSeg ?? 0) > 0);
+        const soma = itens.reduce((total, p) => total + (p.aDuracaoSeg ?? 0), 0);
+        const meio = this.adGapTotal / 2;
+        this.adWindow.set({
+          gapTotal: this.adGapTotal,
+          winStart: Math.max(0, meio - soma / 2),
+          winEnd: Math.min(this.adGapTotal, meio + soma / 2),
+          itens,
+        });
+      },
+      error: () => {
+        this.adPending = false;
+        if (token !== this.adToken || !this.freeGapActive) return;
+        this.adErroFetch = true;
+        // Mantém a última lista boa; sem nada ainda, o slate fica "Tempo livre".
+        if (!this.adWindow()) {
+          this.adWindow.set({ gapTotal: this.adGapTotal, winStart: 0, winEnd: 0, itens: [] });
+        }
+      },
+    });
+  }
+
+  /** Lados do gap a consultar, ou null quando o bloco corrente ainda não existe. */
+  private calcularLadosGap(): { blocoId: number; posicao: PropagandaPosicaoCode }[] | null {
+    const atual = this.currentBloco();
+    if (!atual) return null;
+    if (this.waitSeconds() > 0) return [{ blocoId: atual.aId, posicao: 'TO' }];
+    const lados: { blocoId: number; posicao: PropagandaPosicaoCode }[] = [
+      { blocoId: atual.aId, posicao: 'BA' },
+    ];
+    const prox = this.nextBloco;
+    if (prox && prox.aId !== atual.aId) lados.push({ blocoId: prox.aId, posicao: 'TO' });
+    return lados;
+  }
+
+  private adElapsed(): number {
+    const w = this.adWindow();
+    if (!w) return -1;
+    return Math.max(0, w.gapTotal - this.freeGapSec);
+  }
+
+  /** Slate mostrando "Propaganda" (dentro da janela central do intervalo). */
+  get propagandaActive(): boolean {
+    const w = this.adWindow();
+    if (!w || w.itens.length === 0) return false;
+    const decorrido = this.adElapsed();
+    return decorrido >= w.winStart && decorrido < w.winEnd;
+  }
+
+  /** Segundos restantes da janela de propaganda. */
+  get propagandaSec(): number {
+    const w = this.adWindow();
+    if (!w) return 0;
+    return Math.max(0, Math.ceil(w.winEnd - this.adElapsed()));
+  }
+
+  get propagandaAtual(): PropagandaOutput | null {
+    const w = this.adWindow();
+    if (!w || !this.propagandaActive) return null;
+    const naJanela = this.adElapsed() - w.winStart;
+    let acumulado = 0;
+    for (const p of w.itens) {
+      acumulado += p.aDuracaoSeg ?? 0;
+      if (naJanela < acumulado) return p;
+    }
+    return w.itens[w.itens.length - 1] ?? null;
+  }
+
+  get propagandaLabel(): string {
+    const w = this.adWindow();
+    const atual = this.propagandaAtual;
+    if (!w || !atual) return '';
+    return `${w.itens.indexOf(atual) + 1} de ${w.itens.length}`;
+  }
+
+  /**
+   * Contagem do "Tempo livre": (total do gap − soma das propagandas) / 2 antes
+   * da janela e o mesmo tanto depois dela. A caixa conta até a PRÓXIMA troca
+   * (propaganda ou conteúdo), não o intervalo inteiro.
+   */
+  get tempoLivreSec(): number {
+    const w = this.adWindow();
+    if (!w || w.itens.length === 0) return this.freeGapSec;
+    const decorrido = this.adElapsed();
+    if (decorrido < w.winStart) return Math.max(0, Math.ceil(w.winStart - decorrido));
+    if (decorrido < w.winEnd) return this.propagandaSec;
+    return Math.max(0, Math.ceil(w.gapTotal - decorrido));
   }
 
   togglePlay(): void {

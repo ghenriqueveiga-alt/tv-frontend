@@ -6,46 +6,34 @@
 
   <!-- FIXED QR LEFT -->
   <aside class="qr-fixed-col qr-fixed-left">
-    <div class="crypto-card" style="--coin-color: #F7931A; cursor: pointer;" (click)="openQrModal('Bitcoin', '#F7931A')">
-      <p class="crypto-coin-name">Bitcoin</p>
-      <div class="crypto-qr-placeholder">
-        <svg viewBox="0 0 100 100" class="crypto-qr-svg"><rect width="100" height="100" fill="#fff" rx="4"/><text x="50" y="54" text-anchor="middle" font-size="11" fill="#000" font-family="monospace">QR CODE</text></svg>
+    @for (coin of leftCoins; track coin.key) {
+      <div class="crypto-card" [style.--coin-color]="coin.color" style="cursor: pointer;" (click)="openQrModal(coin)">
+        <p class="crypto-coin-name">{{ coin.name }}</p>
+        <div class="crypto-qr-placeholder">
+          @if (qrDataUrl(coin.address); as url) {
+            <img [src]="url" [alt]="coin.name + ' QR'" class="crypto-qr-svg">
+          } @else {
+            <svg viewBox="0 0 100 100" class="crypto-qr-svg"><rect width="100" height="100" fill="#fff" rx="4"/><text x="50" y="54" text-anchor="middle" font-size="11" fill="#000" font-family="monospace">QR CODE</text></svg>
+          }
+        </div>
       </div>
-    </div>
-    <div class="crypto-card" style="--coin-color: #627EEA; cursor: pointer;" (click)="openQrModal('Ethereum', '#627EEA')">
-      <p class="crypto-coin-name">Ethereum</p>
-      <div class="crypto-qr-placeholder">
-        <svg viewBox="0 0 100 100" class="crypto-qr-svg"><rect width="100" height="100" fill="#fff" rx="4"/><text x="50" y="54" text-anchor="middle" font-size="11" fill="#000" font-family="monospace">QR CODE</text></svg>
-      </div>
-    </div>
-    <div class="crypto-card" style="--coin-color: #F0B90B; cursor: pointer;" (click)="openQrModal('Binance', '#F0B90B')">
-      <p class="crypto-coin-name">Binance</p>
-      <div class="crypto-qr-placeholder">
-        <svg viewBox="0 0 100 100" class="crypto-qr-svg"><rect width="100" height="100" fill="#fff" rx="4"/><text x="50" y="54" text-anchor="middle" font-size="11" fill="#000" font-family="monospace">QR CODE</text></svg>
-      </div>
-    </div>
+    }
   </aside>
 
   <!-- FIXED QR RIGHT -->
   <aside class="qr-fixed-col qr-fixed-right">
-    <div class="crypto-card" style="--coin-color: #9945FF; cursor: pointer;" (click)="openQrModal('Solana', '#9945FF')">
-      <p class="crypto-coin-name">Solana</p>
-      <div class="crypto-qr-placeholder">
-        <svg viewBox="0 0 100 100" class="crypto-qr-svg"><rect width="100" height="100" fill="#fff" rx="4"/><text x="50" y="54" text-anchor="middle" font-size="11" fill="#000" font-family="monospace">QR CODE</text></svg>
+    @for (coin of rightCoins; track coin.key) {
+      <div class="crypto-card" [style.--coin-color]="coin.color" style="cursor: pointer;" (click)="openQrModal(coin)">
+        <p class="crypto-coin-name">{{ coin.name }}</p>
+        <div class="crypto-qr-placeholder">
+          @if (qrDataUrl(coin.address); as url) {
+            <img [src]="url" [alt]="coin.name + ' QR'" class="crypto-qr-svg">
+          } @else {
+            <svg viewBox="0 0 100 100" class="crypto-qr-svg"><rect width="100" height="100" fill="#fff" rx="4"/><text x="50" y="54" text-anchor="middle" font-size="11" fill="#000" font-family="monospace">QR CODE</text></svg>
+          }
+        </div>
       </div>
-    </div>
-    <div class="crypto-card" style="--coin-color: #BFBBBB; cursor: pointer;" (click)="openQrModal('Litecoin', '#BFBBBB')">
-      <p class="crypto-coin-name">Litecoin</p>
-      <div class="crypto-qr-placeholder">
-        <svg viewBox="0 0 100 100" class="crypto-qr-svg"><rect width="100" height="100" fill="#fff" rx="4"/><text x="50" y="54" text-anchor="middle" font-size="11" fill="#000" font-family="monospace">QR CODE</text></svg>
-      </div>
-    </div>
-    <div class="crypto-card" style="--coin-color: #FF6600; cursor: pointer;" (click)="openQrModal('Monero', '#FF6600')">
-      <p class="crypto-coin-name">Monero</p>
-      <div class="crypto-qr-placeholder">
-        <svg viewBox="0 0 100 100" class="crypto-qr-svg"><rect width="100" height="100" fill="#fff" rx="4"/><text x="50" y="54" text-anchor="middle" font-size="11" fill="#000" font-family="monospace">QR CODE</text></svg>
-      </div>
-    </div>
+    }
   </aside>
 
   @if (loading()) {
@@ -142,9 +130,15 @@
             <div class="free-countdown-overlay">
               <div class="tv-scroll">
                 <span class="text-5xl block mb-2">⏳</span>
-                <p class="text-sm text-gray-400 uppercase tracking-widest font-semibold">Tempo livre</p>
-                <p class="text-4xl font-mono font-bold text-yellow-400 my-1">{{ formatTime(gap) }}</p>
-                <p class="text-xs text-gray-500">fim do bloco atual + início do próximo</p>
+                @if (propagandaActive) {
+                  <p class="text-sm text-yellow-400 uppercase tracking-widest font-semibold">Propaganda</p>
+                  <p class="text-4xl font-mono font-bold text-yellow-400 my-1">{{ formatTime(propagandaSec) }}</p>
+                  <p class="text-xs text-gray-500">{{ propagandaAtual?.aNome }}<span class="prop-count"> · {{ propagandaLabel }}</span></p>
+                } @else {
+                  <p class="text-sm text-gray-400 uppercase tracking-widest font-semibold">Tempo livre</p>
+                  <p class="text-4xl font-mono font-bold text-yellow-400 my-1">{{ formatTime(tempoLivreSec) }}</p>
+                  <p class="text-xs text-gray-500">fim do bloco atual + início do próximo</p>
+                }
                 <div class="slate slate-next">
                   <p class="slate-kicker">A seguir</p>
                   @if (prox) {
@@ -364,15 +358,28 @@
   }
 
   @if (qrModalOpen()) {
-    <div class="qr-modal-backdrop">
-      <div class="qr-modal-panel">
+    <div class="qr-modal-backdrop" (click)="closeQrModal()">
+      <div class="qr-modal-panel" (click)="$event.stopPropagation()">
         <button class="qr-modal-close" (click)="closeQrModal()" aria-label="Fechar">✕</button>
         @if (selectedQr(); as qr) {
           <p class="qr-modal-coin" [style.color]="qr.color">{{ qr.name }}</p>
-          <div class="qr-modal-qr" (click)="closeQrModal()" title="Escanear para fechar">
-            <svg viewBox="0 0 100 100" class="crypto-qr-svg"><rect width="100" height="100" fill="#fff" rx="4"/><text x="50" y="54" text-anchor="middle" font-size="11" fill="#000" font-family="monospace">QR CODE</text></svg>
+          <div class="qr-modal-qr">
+            @if (qrDataUrl(qr.address); as url) {
+              <img [src]="url" [alt]="qr.name + ' QR'" class="crypto-qr-svg">
+            } @else {
+              <svg viewBox="0 0 100 100" class="crypto-qr-svg"><rect width="100" height="100" fill="#fff" rx="4"/><text x="50" y="54" text-anchor="middle" font-size="11" fill="#000" font-family="monospace">QR CODE</text></svg>
+            }
           </div>
-          <p class="qr-modal-hint">Clique no QR para simular escaneamento e fechar</p>
+          @if (qr.address) {
+            <code class="qr-modal-addr">{{ qr.address }}</code>
+            <button class="qr-modal-copy" [class.copied]="copiedAddress() === qr.address"
+                    (click)="copiarEndereco(qr.address)">
+              {{ copiedAddress() === qr.address ? 'Copiado' : 'Copiar endereço' }}
+            </button>
+            <p class="qr-modal-hint">Escaneie com a carteira ou copie o endereço</p>
+          } @else {
+            <p class="qr-modal-hint">Carteira ainda não configurada (environment.donations).</p>
+          }
         }
       </div>
     </div>

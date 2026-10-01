@@ -79,7 +79,11 @@
               <div class="wallet-address-box">
                 <code class="wallet-address">{{ w.address }}</code>
               </div>
-              <img [src]="getQrUrl(w.address)" class="wallet-qr" width="100" height="100" alt="QR Code">
+              @if (qrDataUrl(w.address); as url) {
+                <img [src]="url" class="wallet-qr" alt="QR Code">
+              } @else {
+                <div class="wallet-qr" aria-hidden="true"></div>
+              }
             </div>
           }
         </div>

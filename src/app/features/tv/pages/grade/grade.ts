@@ -851,6 +851,8 @@ export class Grade implements OnInit, OnDestroy {
         this.rebuildEpisodioCache();
         this.loading.set(false);
         this.maybeRolloverPage();
+        // Página restaurada/deslocada: os marcadores valem para esta página.
+        this.carregarPropagandas();
         // A barra de páginas só passa a existir depois do @if: espera um tick
         // para o ViewChild resolver e então centraliza o botão da página atual.
         setTimeout(() => this.focarBotaoPagina(this.currentPage()), 0);
@@ -877,6 +879,8 @@ export class Grade implements OnInit, OnDestroy {
       this.computeEffectiveSchedule();
       this.rebuildEpisodioCache();
     }
+    // Tempo livre e propagandas mudam com a página: recarrega os marcadores.
+    this.carregarPropagandas();
   }
 
   nextPage(): void {
@@ -1697,9 +1701,10 @@ export class Grade implements OnInit, OnDestroy {
    *  intervalo — recarregado quando o modal cria/edita/remove uma propaganda. */
   readonly propResumo = signal<Map<string, PropResumo>>(new Map());
 
-  /** Carrega tudo de uma vez (1 chamada), em vez de uma por bloco. */
+  /** Carrega tudo de uma vez (1 chamada), em vez de uma por bloco. Filtra pela
+   *  página da grade: propaganda de uma aba não aparece na outra. */
   carregarPropagandas(): void {
-    this.propagandaService.listAll().subscribe({
+    this.propagandaService.listAll(undefined, this.currentPage()).subscribe({
       next: (res) => {
         const mapa = new Map<string, PropResumo>();
         for (const p of res.aPropagandas ?? []) {
@@ -1868,8 +1873,9 @@ export class Grade implements OnInit, OnDestroy {
     const ctx: PropagandaContexto = {
       intervalo: false,
       titulo: posicao === 'TO' ? 'Livre topo' : 'Livre base',
-      subtitulo: `${bloco.aPrograma?.aNome ?? ''} · ${dia} · ${horario}`,
+      subtitulo: `${bloco.aPrograma?.aNome ?? ''} · ${dia} · ${horario} · Página ${this.currentPage() + 1}`,
       lados: [{ lado: 'C', blocoId: bloco.aId, posicao, capacidade: seg }],
+      pagina: this.currentPage(),
       aoAlterar: () => this.carregarPropagandas(),
     };
     this.propagandaModal?.abrir(ctx);
@@ -1888,11 +1894,12 @@ export class Grade implements OnInit, OnDestroy {
     const ctx: PropagandaContexto = {
       intervalo: true,
       titulo: 'Intervalo livre',
-      subtitulo: `${nomes} · ${dia} · ${gap.horario} – ${prox}`,
+      subtitulo: `${nomes} · ${dia} · ${gap.horario} – ${prox} · Página ${this.currentPage() + 1}`,
       lados: [
         { lado: 'C', blocoId: gap.cima.bloco.aId, posicao: 'BA', capacidade: gap.cima.seg },
         { lado: 'B', blocoId: gap.baixo.bloco.aId, posicao: 'TO', capacidade: gap.baixo.seg },
       ],
+      pagina: this.currentPage(),
       aoAlterar: () => this.carregarPropagandas(),
     };
     this.propagandaModal?.abrir(ctx);

@@ -6,4 +6,14 @@ export const environment = {
   },
   API_URL: 'http://localhost:8080',
   timezoneOffsetHours: 0,
+  // Carteiras de doação: alimentam o QR do player e a página de anúncios.
+  donations: {
+    bitcoin: '',
+    ethereum: '',
+    binance: '',
+    solana: '',
+    litecoin: '',
+    monero: '',
+    lightning: '',
+  },
 };

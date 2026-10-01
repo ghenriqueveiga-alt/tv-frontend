@@ -222,6 +222,8 @@
 }
 
 .wallet-qr {
+  width: 108px;
+  height: 108px;
   border-radius: 6px;
   background: #fff;
   padding: 4px;

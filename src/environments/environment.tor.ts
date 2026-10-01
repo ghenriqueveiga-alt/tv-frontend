@@ -6,4 +6,13 @@ export const environment = {
   },
   API_URL: '',
   timezoneOffsetHours: -3,
+  donations: {
+    bitcoin: '',
+    ethereum: '',
+    binance: '',
+    solana: '',
+    litecoin: '',
+    monero: '',
+    lightning: '',
+  },
 };

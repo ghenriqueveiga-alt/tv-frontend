@@ -68,49 +68,41 @@
           <p class="text-[12px]" style="color:#94a3b8;">Nenhuma propaganda neste espaço ainda.</p>
         }
 
-        <!-- Origem: manual ou catálogo -->
-        <div class="flex gap-2">
-          <button class="tipo-btn"
-                  [class.active]="propAba() === 'manual'"
-                  [class.inactive]="propAba() !== 'manual'"
-                  (click)="abrirAbaProp('manual')">Manual</button>
-          <button class="tipo-btn"
-                  [class.active]="propAba() === 'catalogo'"
-                  [class.inactive]="propAba() !== 'catalogo'"
-                  (click)="abrirAbaProp('catalogo')">Catálogo</button>
-        </div>
+        <!-- Vídeo da propaganda (upload) -->
+        <div>
+          <label class="block text-[11px] font-semibold mb-1.5 uppercase tracking-wider" style="color:#64748b;">Vídeo da propaganda</label>
 
-        @if (propAba() === 'catalogo') {
-          <div>
-            <label class="block text-[11px] font-semibold mb-1.5 uppercase tracking-wider" style="color:#64748b;">Arquivo</label>
-            <input type="text"
-                   [ngModel]="propBusca()"
-                   (ngModelChange)="buscarArquivosProp($event)"
-                   placeholder="Buscar no catalogo..."
-                   class="grade-input" />
-            @if (propArquivos().length > 0 && !propArquivoSel()) {
-              <div class="mt-1 max-h-40 overflow-y-auto search-dropdown">
-                @for (a of propArquivos(); track a.aId) {
-                  <div class="search-dropdown-item" (click)="selecionarArquivoProp(a)">
-                    <span class="truncate">{{ a.aNome }}</span>
-                    <span class="ml-auto text-[10px] shrink-0" style="color:#94a3b8;">{{ a.aTipo }}</span>
-                  </div>
-                }
-              </div>
-            }
-            @if (propArquivoSel(); as ar) {
-              <div class="mt-1.5 flex items-center gap-2 px-3 py-2 rounded-lg" style="background: rgba(14,165,233,0.08); border: 1px solid rgba(14,165,233,0.25);">
-                <span class="text-sm flex-1 font-medium truncate" style="color:#0369a1;">{{ ar.aNome }}</span>
-                @if (propDetectando()) {
-                  <span class="text-[11px] shrink-0" style="color:#64748b;">lendo duracao...</span>
-                }
-                <button class="w-5 h-5 rounded flex items-center justify-center shrink-0 text-xs"
-                        style="color:#64748b;"
-                        (click)="limparArquivoProp()">&times;</button>
-              </div>
-            }
-          </div>
-        }
+          @if (propArquivoSel(); as ar) {
+            <div class="prop-arquivo-chip">
+              <span class="flex-1 min-w-0 truncate" style="color:#0369a1;">{{ ar.aNome }}</span>
+              <span class="prop-arquivo-estado">{{ propEnviando() ? (propUploadPct() ?? 0) + '%' : 'enviado' }}</span>
+              <button class="prop-arquivo-x" type="button" title="Remover vídeo" (click)="limparArquivoProp()">&times;</button>
+            </div>
+          } @else if (!propEnviando() && propArquivoAtualNome()) {
+            <div class="prop-arquivo-chip">
+              <span class="flex-1 min-w-0 truncate" style="color:#0369a1;">{{ propArquivoAtualNome() }}</span>
+              <span class="prop-arquivo-estado">atual</span>
+              <button class="prop-arquivo-x" type="button" title="Remover vídeo" (click)="limparArquivoProp()">&times;</button>
+            </div>
+          } @else {
+            <label class="prop-arquivo-drop">
+              <input type="file"
+                     accept="video/*,.mkv,.avi,.flv,.mpg,.mpeg,.m4v,.wmv,.rmvb"
+                     #arqIn
+                     [disabled]="propEnviando()"
+                     (change)="onArquivoSelecionado(arqIn)" />
+              @if (propEnviando()) {
+                <span>Enviando vídeo... {{ propUploadPct() ?? 0 }}%</span>
+              } @else {
+                <span>Selecionar arquivo de vídeo</span>
+              }
+            </label>
+          }
+
+          @if (propArquivoRemovido()) {
+            <p class="text-[11px] mt-1" style="color:#b45309;">O vídeo será removido ao salvar.</p>
+          }
+        </div>
 
         <!-- Nome -->
         <div>
@@ -157,7 +149,7 @@
         }
         <button class="btn-secondary" (click)="fecharPropagandas()">Fechar</button>
         <button class="btn-primary"
-                [disabled]="!propPodeSalvar() || propSaving()"
+                [disabled]="!propPodeSalvar() || propSaving() || propEnviando()"
                 (click)="salvarPropaganda()">
           {{ propSaving() ? 'Salvando...' : (propEditando() ? 'Salvar' : 'Adicionar') }}
         </button>

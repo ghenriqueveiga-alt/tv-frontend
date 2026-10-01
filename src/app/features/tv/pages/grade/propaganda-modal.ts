@@ -1,8 +1,18 @@
-import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Observable, Subject, Subscription, debounceTime, distinctUntilChanged, forkJoin } from 'rxjs';
+import { HttpEventType } from '@angular/common/http';
+import { Observable, forkJoin } from 'rxjs';
 import { TvService, ArquivoOutput } from '../../services/tv.service';
-import { PropagandaService, PropagandaOutput, PropagandaPosicaoCode } from '../../services/propaganda.service';
+import {
+  PropagandaService,
+  PropagandaOutput,
+  PropagandaPosicaoCode,
+  PatchPropagandaPayload,
+} from '../../services/propaganda.service';
+
+/** Extensões aceitas para o vídeo da propaganda (a mesma lista do backend). */
+const EXTENSOES_VIDEO = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.flv',
+                         '.mpg', '.mpeg', '.m4v', '.wmv', '.rmvb'];
 
 /** Um lado do espaço livre: bloco + posição dentro dele + capacidade em segundos. */
 export interface PropagandaLado {
@@ -24,6 +34,9 @@ export interface PropagandaContexto {
   titulo: string;
   subtitulo: string;
   lados: PropagandaLado[];
+  /** Página da grade (aba de episódios) em que o modal está aberto: as
+   *  propagandas são por página, uma propaganda não vale em outra aba. */
+  pagina: number;
   /** Após criar/editar/remover/reordenar, a grade é avisada para recarregar os
    *  marcadores (📢 + tempo restante) desenhados nos quadrados "Livre" e nos
    *  cards de intervalo. */
@@ -44,7 +57,7 @@ export interface PropagandaContexto {
   styleUrl: './propaganda-modal.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class PropagandaModal implements OnInit, OnDestroy {
+export class PropagandaModal {
 
   readonly propagandaService = inject(PropagandaService);
   readonly tvService = inject(TvService);
@@ -54,28 +67,17 @@ export class PropagandaModal implements OnInit, OnDestroy {
   readonly propCarregando = signal(false);
   readonly propSaving = signal(false);
   readonly propErro = signal('');
-  readonly propAba = signal<'manual' | 'catalogo'>('manual');
   readonly propNome = signal('');
   readonly propDuracao = signal('');
-  readonly propBusca = signal('');
-  readonly propArquivos = signal<ArquivoOutput[]>([]);
+  /** Arquivo enviado nesta sessão (ainda não salvo na propaganda). */
   readonly propArquivoSel = signal<ArquivoOutput | null>(null);
+  /** O vídeo já gravado na propaganda em edição foi marcado para sair. */
+  readonly propArquivoRemovido = signal(false);
+  readonly propEnviando = signal(false);
+  readonly propUploadPct = signal<number | null>(null);
   readonly propDetectando = signal(false);
   readonly propDuracaoFalhou = signal(false);
   readonly propEditando = signal<PropagandaOutput | null>(null);
-
-  private propBusca$ = new Subject<string>();
-  private propBuscaSub?: Subscription;
-
-  ngOnInit(): void {
-    this.propBuscaSub = this.propBusca$
-      .pipe(debounceTime(250), distinctUntilChanged())
-      .subscribe(term => this.executarBuscaArquivos(term));
-  }
-
-  ngOnDestroy(): void {
-    if (this.propBuscaSub) this.propBuscaSub.unsubscribe();
-  }
 
   // ── Abertura/fechamento ───────────────────────────────────────────────
 
@@ -104,13 +106,13 @@ export class PropagandaModal implements OnInit, OnDestroy {
     this.propCarregando.set(false);
     this.propNome.set('');
     this.propDuracao.set('');
-    this.propBusca.set('');
-    this.propArquivos.set([]);
     this.propArquivoSel.set(null);
+    this.propArquivoRemovido.set(false);
+    this.propEnviando.set(false);
+    this.propUploadPct.set(null);
     this.propEditando.set(null);
     this.propDetectando.set(false);
     this.propDuracaoFalhou.set(false);
-    this.propAba.set('manual');
   }
 
   // ── Cabeçalho e totais ────────────────────────────────────────────────
@@ -266,20 +268,13 @@ export class PropagandaModal implements OnInit, OnDestroy {
 
   // ── Lista (CRUD) ──────────────────────────────────────────────────────
 
-  abrirAbaProp(aba: 'manual' | 'catalogo'): void {
-    this.propAba.set(aba);
-    if (aba === 'catalogo' && this.propArquivos().length === 0 && !this.propBusca()) {
-      this.executarBuscaArquivos('');
-    }
-  }
-
   private carregarPropagandas(): void {
     const ctx = this.contexto();
     if (!ctx || !ctx.lados.length) return;
     // 1 ou 2 lados: as filas entram na mesma lista, na ordem dos lados
     // (primeiro o de cima, depois o de baixo), cada uma por `ordem`.
     this.propCarregando.set(true);
-    forkJoin(ctx.lados.map(l => this.propagandaService.list(l.blocoId, l.posicao))).subscribe({
+    forkJoin(ctx.lados.map(l => this.propagandaService.list(l.blocoId, l.posicao, ctx.pagina))).subscribe({
       next: (respostas) => {
         const porOrdem = (lista: PropagandaOutput[]) =>
           [...(lista ?? [])].sort((a, b) => (a.aOrdem ?? 0) - (b.aOrdem ?? 0));
@@ -318,15 +313,28 @@ export class PropagandaModal implements OnInit, OnDestroy {
     this.propSaving.set(true);
     this.propErro.set('');
 
-    const requisicao: Observable<any> = editado
-      ? this.propagandaService.patch(editado.aId, { aNome: nome, aDuracaoSeg: seg })
-      : this.propagandaService.create({
-          aBlocoId: alvo!.blocoId,
-          aPosicaoCode: alvo!.posicao,
-          aNome: nome,
-          aDuracaoSeg: seg,
-          aArquivoId: this.propArquivoSel()?.aId ?? null,
-        });
+    const arquivoEnviado = this.propArquivoSel();
+    const pagina = editado?.aPagina ?? this.contexto()?.pagina ?? null;
+    let requisicao: Observable<any>;
+
+    if (editado) {
+      const patch: PatchPropagandaPayload = { aNome: nome, aDuracaoSeg: seg, aPagina: pagina ?? undefined };
+      if (this.propArquivoRemovido()) {
+        patch.aRemoverArquivo = true;
+      } else if (arquivoEnviado) {
+        patch.aArquivoId = arquivoEnviado.aId;
+      }
+      requisicao = this.propagandaService.patch(editado.aId, patch);
+    } else {
+      requisicao = this.propagandaService.create({
+        aBlocoId: alvo!.blocoId,
+        aPosicaoCode: alvo!.posicao,
+        aNome: nome,
+        aDuracaoSeg: seg,
+        aArquivoId: arquivoEnviado?.aId ?? null,
+        aPagina: this.contexto()?.pagina ?? 0,
+      });
+    }
 
     requisicao.subscribe({
       next: () => {
@@ -334,6 +342,7 @@ export class PropagandaModal implements OnInit, OnDestroy {
         this.propNome.set('');
         this.propDuracao.set('');
         this.propArquivoSel.set(null);
+        this.propArquivoRemovido.set(false);
         this.carregarPropagandas();
         this.notificarGrade();
       },
@@ -348,6 +357,8 @@ export class PropagandaModal implements OnInit, OnDestroy {
     this.propEditando.set(p);
     this.propNome.set(p.aNome);
     this.propDuracao.set(this.formatarDuracaoProp(p.aDuracaoSeg));
+    this.propArquivoSel.set(null);
+    this.propArquivoRemovido.set(false);
     this.propErro.set('');
   }
 
@@ -355,6 +366,8 @@ export class PropagandaModal implements OnInit, OnDestroy {
     this.propEditando.set(null);
     this.propNome.set('');
     this.propDuracao.set('');
+    this.propArquivoSel.set(null);
+    this.propArquivoRemovido.set(false);
     this.propErro.set('');
   }
 
@@ -408,44 +421,72 @@ export class PropagandaModal implements OnInit, OnDestroy {
     });
   }
 
-  // ── Catálogo de arquivos ──────────────────────────────────────────────
+  // ── Upload do vídeo ───────────────────────────────────────────────────
 
-  buscarArquivosProp(term: string): void {
-    this.propBusca.set(term ?? '');
-    this.propBusca$.next(term ?? '');
+  /** Nome do vídeo já gravado que continua valendo (null se não houver,
+   *  se foi marcado para sair ou se outro arquivo foi enviado). */
+  propArquivoAtualNome(): string | null {
+    if (this.propArquivoSel() || this.propArquivoRemovido()) return null;
+    return this.propEditando()?.aArquivoNome ?? null;
   }
 
-  private executarBuscaArquivos(term: string): void {
-    this.tvService.listArquivos(0, 100, term).subscribe({
-      next: (res) => this.propArquivos.set((res.aArquivos ?? []).filter(a => this.ehVideo(a))),
-      error: () => this.propArquivos.set([]),
+  /** Escolheu o arquivo: valida a extensão, lê a duração e envia. */
+  onArquivoSelecionado(input: HTMLInputElement): void {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+
+    const ext = this.extensaoDe(file.name);
+    if (!EXTENSOES_VIDEO.includes(ext)) {
+      this.propErro.set(`Formato não suportado${ext ? ` (${ext})` : ''}.`
+        + ` Envie um vídeo: ${EXTENSOES_VIDEO.join(', ')}.`);
+      return;
+    }
+
+    this.propErro.set('');
+    this.propArquivoRemovido.set(false);
+    this.propDuracaoFalhou.set(false);
+    this.detectarDuracaoLocal(file);
+    this.enviarArquivo(file);
+  }
+
+  private enviarArquivo(file: File): void {
+    this.propEnviando.set(true);
+    this.propUploadPct.set(0);
+
+    this.tvService.uploadArquivo(file).subscribe({
+      next: evento => {
+        if (evento.type === HttpEventType.UploadProgress && evento.total) {
+          this.propUploadPct.set(Math.round((evento.loaded / evento.total) * 100));
+        } else if (evento.type === HttpEventType.Response && evento.body) {
+          this.propEnviando.set(false);
+          this.propUploadPct.set(null);
+          this.propArquivoSel.set(evento.body);
+          if (!this.propNome().trim()) {
+            this.propNome.set(file.name.replace(/\.[^.]+$/, ''));
+          }
+        }
+      },
+      error: () => {
+        this.propEnviando.set(false);
+        this.propUploadPct.set(null);
+        this.propErro.set('Não foi possível enviar o arquivo.');
+      },
     });
   }
 
-  /** Só vídeos entram no seletor de propaganda (o catálogo tem capas em .jpg). */
-  private ehVideo(a: ArquivoOutput): boolean {
-    const tipo = (a.aTipo ?? '').toLowerCase();
-    return ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.flv', '.mpg', '.mpeg', '.m4v'].includes(tipo);
-  }
-
-  selecionarArquivoProp(a: ArquivoOutput): void {
-    this.propArquivoSel.set(a);
-    this.propArquivos.set([]);
-    if (!this.propNome().trim()) this.propNome.set(a.aNome);
-    this.propErro.set('');
-    this.propBusca.set('');
-    this.propDuracaoFalhou.set(false);
-    this.detectarDuracaoArquivo(a);
-  }
-
+  /** Desassocia o vídeo: o enviado agora, ou (ao salvar) o que já está gravado. */
   limparArquivoProp(): void {
+    if (this.propEnviando()) return;
     this.propArquivoSel.set(null);
+    this.propArquivoRemovido.set(!!this.propEditando()?.aArquivoId);
     this.propDetectando.set(false);
     this.propDuracaoFalhou.set(false);
   }
 
-  /** Preenche a duração lendo os metadados do arquivo no player. */
-  private detectarDuracaoArquivo(a: ArquivoOutput): void {
+  /** Preenche a duração lendo os metadados do arquivo escolhido (sem subir). */
+  private detectarDuracaoLocal(file: File): void {
+    const url = URL.createObjectURL(file);
     const video = document.createElement('video');
     video.preload = 'metadata';
     this.propDetectando.set(true);
@@ -457,6 +498,7 @@ export class PropagandaModal implements OnInit, OnDestroy {
       concluido = true;
       this.propDetectando.set(false);
       this.propDuracaoFalhou.set(!detectou);
+      URL.revokeObjectURL(url);
       video.removeAttribute('src');
     };
     video.onloadedmetadata = () => {
@@ -469,10 +511,16 @@ export class PropagandaModal implements OnInit, OnDestroy {
       }
     };
     video.onerror = () => fim(false);
-    video.src = this.tvService.streamUrl(a.aId);
+    video.src = url;
 
     // alguns formatos (mkv/avi) não entregam metadados no navegador
-    setTimeout(() => fim(this.propDuracao().length > 0), 6000);
+    setTimeout(() => fim(this.propDetectando()), 6000);
+  }
+
+  /** "meu_video.MP4" → ".mp4". */
+  private extensaoDe(nome: string): string {
+    const ponto = nome.lastIndexOf('.');
+    return ponto < 0 ? '' : nome.slice(ponto).toLowerCase();
   }
 
   // ── Conversão ─────────────────────────────────────────────────────────

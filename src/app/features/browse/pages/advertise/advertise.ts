@@ -1,6 +1,8 @@
 import { Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { AnuncioService, CreateAnuncioPayload } from '../../../../core/services/anuncio.service';
+import { qrDataUrl as gerarQrDataUrl } from '../../../../core/utils/qr';
+import { environment } from '../../../../../environments/environment';
 
 @Component({
   selector: 'app-advertise',
@@ -31,10 +33,13 @@ export class Advertise {
   };
 
   readonly wallets = [
-    { coin: 'Bitcoin', symbol: 'BTC', address: 'SUA_WALLET_AQUI', color: '#f7931a', icon: '₿', priceRef: '~$60,000' },
-    { coin: 'Ethereum', symbol: 'ETH', address: 'SUA_WALLET_AQUI', color: '#627eea', icon: 'Ξ', priceRef: '~$3,000' },
-    { coin: 'Lightning', symbol: 'LN', address: 'SUA_WALLET_AQUI', color: '#7b61ff', icon: '⚡', priceRef: 'Instant' },
+    { coin: 'Bitcoin', symbol: 'BTC', address: environment.donations.bitcoin, color: '#f7931a', icon: '₿', priceRef: '~$60,000' },
+    { coin: 'Ethereum', symbol: 'ETH', address: environment.donations.ethereum, color: '#627eea', icon: 'Ξ', priceRef: '~$3,000' },
+    { coin: 'Lightning', symbol: 'LN', address: environment.donations.lightning, color: '#7b61ff', icon: '⚡', priceRef: 'Instant' },
   ];
+
+  /** QR gerado localmente (mesmo cache do player). */
+  readonly qrDataUrl = gerarQrDataUrl;
 
   readonly plans = [
     { name: 'Basico', posicao: 1, largura: 300, altura: 250, price: 0.001, desc: 'Sidebar banner (300x250)' },
@@ -50,10 +55,6 @@ export class Advertise {
     this.form.largura = plan.largura;
     this.form.altura = plan.altura;
     this.form.valorPago = plan.price;
-  }
-
-  getQrUrl(address: string): string {
-    return `https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(address)}`;
   }
 
   async onSubmit() {

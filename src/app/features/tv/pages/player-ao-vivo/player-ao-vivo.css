@@ -392,6 +392,14 @@
   overflow-y: auto;
 }
 
+/* Contador "1 de 2" da janela de propaganda. */
+.prop-count {
+  color: #facc15;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
 .slate {
   margin: 1rem auto 0;
   max-width: 28rem;
@@ -794,8 +802,35 @@
   background: #fff;
   border-radius: 0.75rem;
   overflow: hidden;
-  cursor: pointer;
   border: 1px solid #374151;
+}
+
+.qr-modal-addr {
+  display: block;
+  max-width: 280px;
+  margin-top: 0.75rem;
+  font-family: monospace;
+  font-size: 0.7rem;
+  color: #cbd5e1;
+  text-align: center;
+  word-break: break-all;
+}
+
+.qr-modal-copy {
+  margin-top: 0.5rem;
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 0.5rem;
+  background: #e5e7eb;
+  color: #0f172a;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.qr-modal-copy.copied {
+  background: #22c55e;
+  color: #052e16;
 }
 
 .qr-modal-hint {

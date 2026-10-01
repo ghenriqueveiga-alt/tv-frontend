@@ -1,5 +1,5 @@
 import { Injectable, inject } from '@angular/core';
-import { HttpClient, HttpParams } from '@angular/common/http';
+import { HttpClient, HttpEvent, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { environment } from '../../../../environments/environment';
 
@@ -216,6 +216,16 @@ export class TvService {
       .set('direction', 'asc');
     if (search) params = params.set('search', search);
     return this.http.get<PaginatedArquivos>(`${this.baseUrl}/arquivo`, { params });
+  }
+
+  /** Envia o vídeo da propaganda; emite progresso e termina com o arquivo criado. */
+  uploadArquivo(file: File): Observable<HttpEvent<ArquivoOutput>> {
+    const dados = new FormData();
+    dados.append('file', file, file.name);
+    return this.http.post<ArquivoOutput>(`${this.baseUrl}/arquivo/upload`, dados, {
+      reportProgress: true,
+      observe: 'events',
+    });
   }
 
   deleteBloco(id: number): Observable<any> {
