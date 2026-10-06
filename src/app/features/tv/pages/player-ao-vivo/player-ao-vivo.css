@@ -839,4 +839,69 @@
   margin-top: 0.75rem;
 }
 
+/* Botões de valor: pagamento em SOL pela extensão Phantom. */
+.qr-modal-pay {
+  margin-top: 1rem;
+  text-align: center;
+}
 
+.qr-modal-pay-title {
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: #9945ff;
+  margin-bottom: 0.5rem;
+}
+
+.qr-modal-values {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.qr-modal-value {
+  padding: 0.45rem 0.8rem;
+  border: 1px solid rgba(153, 69, 255, 0.5);
+  border-radius: 0.5rem;
+  background: rgba(153, 69, 255, 0.12);
+  color: #e9d5ff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.qr-modal-value:hover {
+  background: rgba(153, 69, 255, 0.3);
+}
+
+
+
+/* QR do modal: clique abre a carteira da moeda (EVM via extensao, demais no celular). */
+.qr-modal-qr {
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.qr-modal-qr:hover {
+  transform: scale(1.02);
+}
+
+/* Aviso do fluxo de carteira (abrindo, cancelado, moeda sem suporte). */
+.metamask-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 1.5rem;
+  transform: translateX(-50%);
+  z-index: 100;
+  max-width: min(92vw, 34rem);
+  padding: 0.7rem 1.1rem;
+  background: #111827;
+  color: #f9fafb;
+  border: 1px solid #374151;
+  border-radius: 0.75rem;
+  font-size: 0.85rem;
+  text-align: center;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}

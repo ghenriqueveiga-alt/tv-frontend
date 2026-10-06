@@ -4,10 +4,11 @@ import { ProductService } from '../../../../core/services/product.service';
 import { CartService } from '../../../../core/services/cart.service';
 import { FavoritesService } from '../../../../core/services/favorites.service';
 import { CategoryService } from '../../../../core/services/category.service';
+import { AdSlot } from '../../../../core/components/ad-slot/ad-slot';
 
 @Component({
   selector: 'app-home',
-  imports: [RouterLink],
+  imports: [RouterLink, AdSlot],
   templateUrl: './home.html',
   styleUrl: './home.css',
 })

@@ -12,4 +12,9 @@ export default [
     canActivate: [adminGuard],
     loadComponent: () => import('./pages/category-registration/category-registration').then(m => m.CategoryRegistration),
   },
+  {
+    path: 'anuncios',
+    canActivate: [adminGuard],
+    loadComponent: () => import('./pages/anuncio-list/anuncio-list').then(m => m.AnuncioList),
+  },
 ] as Routes;

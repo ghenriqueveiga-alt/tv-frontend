@@ -10,6 +10,8 @@ import { PropagandaService, PropagandaOutput, PropagandaPosicaoCode } from '../.
 import { duracaoPacote, inicioSlot, limparCacheMultiEp, pacoteBloco } from '../../utils/multi-episodio';
 import { environment } from '../../../../../environments/environment';
 import { qrDataUrl as gerarQrDataUrl } from '../../../../core/utils/qr';
+import { pagarComCarteira } from '../../../../core/utils/carteira';
+import { pagarComPhantom, temProvedorSolana } from '../../../../core/utils/solana';
 
 interface EpisodioInfo {
   aId: number;
@@ -225,22 +227,72 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
   private initialLoadPending = false;
 
   // ---- Doação em cripto: cards laterais + modal de QR ----
+  /** Só vira card quem tem endereço preenchido no environment (as vazias ficam
+   *  de fora em vez de aparecerem como "QR CODE" sem endereço). */
   readonly donationCoins: DonationCoin[] = [
     { key: 'bitcoin', name: 'Bitcoin', color: '#F7931A', address: environment.donations.bitcoin },
     { key: 'ethereum', name: 'Ethereum', color: '#627EEA', address: environment.donations.ethereum },
-    { key: 'binance', name: 'Binance', color: '#F0B90B', address: environment.donations.binance },
+    { key: 'binance', name: 'BNB Chain', color: '#F0B90B', address: environment.donations.binance },
     { key: 'solana', name: 'Solana', color: '#9945FF', address: environment.donations.solana },
-    { key: 'litecoin', name: 'Litecoin', color: '#BFBBBB', address: environment.donations.litecoin },
-    { key: 'monero', name: 'Monero', color: '#FF6600', address: environment.donations.monero },
-  ];
-  readonly leftCoins = this.donationCoins.slice(0, 3);
-  readonly rightCoins = this.donationCoins.slice(3);
+    { key: 'tron', name: 'Tron', color: '#EF0027', address: environment.donations.tron },
+    { key: 'polygon', name: 'Polygon', color: '#8247E5', address: environment.donations.polygon },
+  ].filter(coin => !!coin.address);
+  /** Divide ao meio para os cards ficarem dos dois lados da tela. */
+  readonly leftCoins = this.donationCoins.slice(0, Math.ceil(this.donationCoins.length / 2));
+  readonly rightCoins = this.donationCoins.slice(Math.ceil(this.donationCoins.length / 2));
   /** QR do endereço como data URL (cache global por endereço). */
   readonly qrDataUrl = gerarQrDataUrl;
 
   readonly qrModalOpen = signal(false);
   readonly selectedQr = signal<DonationCoin | null>(null);
   readonly copiedAddress = signal<string | null>(null);
+  /** Aviso do resultado da carteira (abrindo, cancelado, moeda não suportada). */
+  readonly avisoCarteira = signal<string | null>(null);
+  private avisoTimer: any = null;
+
+  /**
+   * Clique no QR: EVM abre MetaMask/Phantom na tela de pagamento; Bitcoin e
+   * Solana disparam o deep link da carteira no celular; no computador (e no
+   * Tron) cai no modal com o QR para escanear/copiar.
+   */
+  async aoClicarQr(coin: DonationCoin): Promise<void> {
+    const resultado = await pagarComCarteira(coin.address, coin.key);
+
+    this.mostrarAviso(resultado.motivo);
+
+    if (resultado.ok) {
+      return;
+    }
+
+    this.openQrModal(coin);
+  }
+
+  private mostrarAviso(motivo: string): void {
+    this.avisoCarteira.set(motivo);
+    if (this.avisoTimer) clearTimeout(this.avisoTimer);
+    this.avisoTimer = setTimeout(() => this.avisoCarteira.set(null), 6000);
+  }
+
+  /** QR grande do modal: mesmo comportamento dos cards laterais. */
+  async aoClicarQrModal(qr: DonationCoin): Promise<void> {
+    const resultado = await pagarComCarteira(qr.address, qr.key);
+    this.mostrarAviso(resultado.motivo);
+  }
+
+  /** Valores rápidos do modal: só para SOL quando há Phantom injetada. */
+  readonly valoresSol = [0.01, 0.05, 0.1, 0.5];
+  readonly temPhantomSol = temProvedorSolana();
+
+  podePagarComPhantom(coin: DonationCoin | null): boolean {
+    return !!coin && coin.key === 'solana' && !!coin.address && this.temPhantomSol;
+  }
+
+  /** Botão de valor do modal: monta a transferência e abre a confirmação. */
+  async pagarSolanaValor(endereco: string, valor: number): Promise<void> {
+    const resultado = await pagarComPhantom(endereco, valor);
+    this.mostrarAviso(resultado.motivo);
+    if (resultado.ok) this.closeQrModal();
+  }
 
   openQrModal(coin: DonationCoin): void {
     this.selectedQr.set(coin);
@@ -755,7 +807,6 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     const [bh, bm] = blocoStart.split(':').map(Number);
     const blocoTotalSeconds = bh * 3600 + bm * 60;
     const currentTotalSeconds = h * 3600 + m * 60 + s;
-    const segundosNoBloco = this.linhaService.segundosDentroBloco();
     const epLive = this.episodioAlvo(bloco, dia);
     this.currentEpisodio.set(epLive);
     // Bloco multiepisódio: o tempo livre é 30 min − soma de TODOS os
@@ -777,7 +828,12 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
       const slotIdx2 = (oh * 60 + slotMinutes) / 30 - (bh * 60 + bm) / 30;
       seekBase = slotIdx2 * 30 * 60 + (om % 30) * 60 + multiSlotOffset;
     } else if (this.linhaService.slot()) {
-      seekBase = segundosNoBloco + multiSlotOffset;
+      // Linha pinada exatamente no início do bloco: a grade desenha a linha
+      // no topo da faixa do EPISÓDIO, então o player entra direto no 0:00 do
+      // vídeo. Antes seekBase era 0 e adjustedSeek virava −topFree, que
+      // segurava a tela em "Aguardando" o tempo livre de cima — como se a
+      // linha marcasse o início do BLOCO.
+      seekBase = topFree + multiSlotOffset;
     } else if (overrideSlot) {
       seekBase = multiSlotOffset;
     } else {

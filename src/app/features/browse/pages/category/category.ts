@@ -7,12 +7,13 @@ import { ProductService } from '../../../../core/services/product.service';
 import { CartService } from '../../../../core/services/cart.service';
 import { FavoritesService } from '../../../../core/services/favorites.service';
 import { CategoryService } from '../../../../core/services/category.service';
+import { AdSlot } from '../../../../core/components/ad-slot/ad-slot';
 
 interface PriceRange { min: number; max: number; label: string; }
 
 @Component({
   selector: 'app-category',
-  imports: [RouterLink, FormsModule],
+  imports: [RouterLink, FormsModule, AdSlot],
   templateUrl: './category.html',
   styleUrl: './category.css',
 })

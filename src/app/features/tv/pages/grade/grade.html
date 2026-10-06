@@ -157,13 +157,20 @@
                 @if (gapResumo(dia, horario); as gap) {
                   <!-- Soma dos tempos livres, por cima do "Livre" de baixo do episódio de cima
                        e do "Livre" de cima do de baixo (só dias úteis, entre dois episódios).
-                       Este card é o que recebe o modal de propaganda do intervalo — e já
-                       mostra as propagandas salvas (📢) com o tempo restante. -->
+                       Este card é o que recebe o modal de propaganda do intervalo — mostra as
+                       propagandas salvas (📢) com a SOMA das durações e, nos parênteses, o
+                       tempo livre restante dividido em 2. -->
                   <div class="gap-bloco absolute left-9 right-10 top-[calc(100%_-_21px)] z-[5] flex items-center justify-center gap-1.5 rounded-md border border-dashed border-gray-300 bg-gray-100 font-mono text-[10px] text-gray-500" [style.height.px]="gapAltura(horario)" [attr.title]="gap.titulo" (click)="abrirGapPropagandas(dia, horario)">
                     @if (gap.qtd > 0) {
                       <span class="prop-marca">📢 {{ gap.qtd }}</span>
                     }
                     <span>{{ gap.texto }}</span>
+                    @if (gap.par1) {
+                      <span class="flex flex-col leading-tight text-right">
+                        <span>({{ gap.par1 }})</span>
+                        <span>({{ gap.par2 }})</span>
+                      </span>
+                    }
                   </div>
                 }
                 @for (bloco of blocosFor(dia, horario); track bloco.aId) {

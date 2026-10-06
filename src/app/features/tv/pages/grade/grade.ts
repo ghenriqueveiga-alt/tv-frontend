@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { TvService, GradeOutput, BlocoOutput, ProgramaOutput } from '../../services/tv.service';
 import { PropagandaService, PropagandaPosicaoCode } from '../../services/propaganda.service';
-import { PropagandaModal, PropagandaContexto } from './propaganda-modal';
+import { PropagandaModal, PropagandaContexto, sobrasCentralizadas } from './propaganda-modal';
 import { LinhaVermelhaService } from '../../services/linha-vermelha.service';
 import { ServerTimeService } from '../../../../core/services/server-time.service';
 import { environment } from '../../../../../environments/environment';
@@ -38,18 +38,26 @@ interface PropagandaGap {
 }
 
 /** Resumo das propagandas de uma metade de um bloco (um quadrado "Livre"):
- *  quantidade, segundos ocupados e os rótulos já formatados para o tooltip. */
+ *  quantidade, segundos ocupados, os rótulos já formatados para o tooltip e as
+ *  durações na mesma fila do modal (lado a lado, cada uma por `aOrdem`) — é
+ *  essa fila que a conta centralizada do intervalo percorre. */
 interface PropResumo {
   qtd: number;
   usado: number;
   nomes: string[];
+  duracoes: number[];
 }
 
-/** Card de soma pronto para desenhar (texto já com as propagandas descontadas). */
+/** Card de soma pronto para desenhar: com propaganda `texto` é a SOMA das
+ *  durações das peças; sem propaganda é o tempo livre do intervalo. `par1`/`par2`
+ *  é o TEMPO RESTANTE (livre − usado) dividido em 2, empilhado à direita do
+ *  total — só existe quando o intervalo tem propaganda. */
 interface GapResumo {
   texto: string;
   qtd: number;
   titulo: string;
+  par1?: string;
+  par2?: string;
 }
 
 /** Intervalo que cobre um quadrado "Livre": os dois blocos envolvidos, o horário
@@ -1486,43 +1494,50 @@ export class Grade implements OnInit, OnDestroy {
     return baixo + topo;
   }
 
-  /** Card de soma desta linha com a próxima, pronto para desenhar: o texto já
-   *  vem com as propagandas dos dois lados (BA do último bloco da linha + TO do
-   *  primeiro da seguinte) descontadas e o tooltip lista cada peça. `null` =
-   *  não desenha o card (fim de semana, extremos ou soma zero — a mesma regra
-   *  de quando o intervalo cobre um quadrado, em `intervaloDoQuadrado`). */
+  /** Card de soma desta linha com a próxima, pronto para desenhar: com
+   *  propaganda o texto é a SOMA das durações das peças dos dois lados (BA do
+   *  último bloco da linha + TO do primeiro da seguinte) e os parênteses trazem
+   *  o tempo restante; sem propaganda o texto é o tempo livre do intervalo. O
+   *  tooltip lista cada peça. `null` = não desenha o card (fim de semana,
+   *  extremos ou soma zero — a mesma regra de quando o intervalo cobre um
+   *  quadrado, em `intervaloDoQuadrado`). */
   gapResumo(dia: string, horario: string): GapResumo | null {
     if (this.isFimDeSemana(dia)) return null;
-    const total = this.gapEntreLinhas(dia, horario);
+    const i = this.horarios.indexOf(horario);
+    const proxHorario = i >= 0 ? this.horarios[i + 1] : undefined;
+    if (!proxHorario) return null;
+    const atual = this.blocosFor(dia, horario);
+    const proximo = this.blocosFor(dia, proxHorario);
+    if (!atual.length || !proximo.length) return null;
+    const capC = this.tempoLivreBaixoSeg(atual[atual.length - 1], dia, horario);
+    const capB = this.tempoLivreTopoSeg(proximo[0], dia, proxHorario);
+    const total = capC + capB;
     if (total <= 0) return null;
 
+    const resC = this.resumoProp(atual[atual.length - 1].aId, 'BA');
+    const resB = this.resumoProp(proximo[0].aId, 'TO');
     let qtd = 0;
     let usado = 0;
     const nomes: string[] = [];
-
-    const i = this.horarios.indexOf(horario);
-    const proxHorario = i >= 0 ? this.horarios[i + 1] : undefined;
-    if (proxHorario) {
-      const atual = this.blocosFor(dia, horario);
-      const proximo = this.blocosFor(dia, proxHorario);
-      const lados: (PropResumo | null)[] = [
-        atual.length ? this.resumoProp(atual[atual.length - 1].aId, 'BA') : null,
-        proximo.length ? this.resumoProp(proximo[0].aId, 'TO') : null,
-      ];
-      for (const r of lados) {
-        if (!r) continue;
-        qtd += r.qtd;
-        usado += r.usado;
-        nomes.push(...r.nomes);
-      }
+    for (const r of [resC, resB]) {
+      if (!r) continue;
+      qtd += r.qtd;
+      usado += r.usado;
+      nomes.push(...r.nomes);
     }
 
     const restante = Math.max(0, total - usado);
     const base = 'Soma dos tempos livres — clique para adicionar propaganda';
-    const titulo = qtd > 0
-      ? `${base}\nPropagandas: ${nomes.join(' · ')}\nUsado ${this.formatSec(usado)} · Resta ${this.formatSec(restante)}`
-      : base;
-    return { texto: this.formatSec(restante), qtd, titulo };
+    if (qtd === 0) return { texto: this.formatSec(restante), qtd, titulo: base };
+
+    // Com propaganda, o número principal é o TEMPO TOTAL DAS PROPAGANDAS (soma
+    // das durações) e à direita fica o TEMPO RESTANTE (livre − usado) dividido
+    // em 2, empilhado: a primeira parte em cima, a segunda embaixo.
+    const meio = Math.floor(restante / 2);
+    const texto = this.formatSec(usado > 0 ? usado : restante);
+    const titulo = `${base}\nPropagandas: ${nomes.join(' · ')}`
+      + `\nUsado ${this.formatSec(usado)} · Resta ${this.formatSec(restante)}`;
+    return { texto, qtd, titulo, par1: this.formatSec(meio), par2: this.formatSec(restante - meio) };
   }
 
   /** 52 px = "Livre" de baixo (15) + folga entre as células (8) + "Livre" de
@@ -1707,20 +1722,27 @@ export class Grade implements OnInit, OnDestroy {
     this.propagandaService.listAll(undefined, this.currentPage()).subscribe({
       next: (res) => {
         const mapa = new Map<string, PropResumo>();
+        const filas = new Map<string, { ordem: number; seg: number }[]>();
         for (const p of res.aPropagandas ?? []) {
           if (p.aBlocoId == null) continue;
           const posicao: PropagandaPosicaoCode = p.aPosicao === 'Base' ? 'BA' : 'TO';
           const chave = `${p.aBlocoId}|${posicao}`;
           let r = mapa.get(chave);
           if (!r) {
-            r = { qtd: 0, usado: 0, nomes: [] };
+            r = { qtd: 0, usado: 0, nomes: [], duracoes: [] };
             mapa.set(chave, r);
+            filas.set(chave, []);
           }
           const seg = p.aDuracaoSeg ?? 0;
           r.qtd++;
           r.usado += seg;
           // rótulo pronto: o tooltip não formata nada durante o render
           r.nomes.push(`${p.aNome} (${this.formatSec(seg)})`);
+          filas.get(chave)!.push({ ordem: p.aOrdem ?? 0, seg });
+        }
+        for (const [chave, fila] of filas) {
+          const r = mapa.get(chave)!;
+          r.duracoes = fila.sort((a, b) => a.ordem - b.ordem).map(i => i.seg);
         }
         this.propResumo.set(mapa);
       },
@@ -1798,6 +1820,15 @@ export class Grade implements OnInit, OnDestroy {
     return { cima, baixo: bloco, horarioCima: anterior, horarioBaixo: horario, capC, capB };
   }
 
+  /** Fila de durações de um intervalo — lado de cima (BA do bloco de cima),
+   *  depois o de baixo (TO do de baixo), cada um por `aOrdem`: é a mesma ordem
+   *  em que o modal de propaganda percorre a lista. */
+  private duracoesDoIntervalo(iv: IntervaloQuadrado): number[] {
+    const resC = this.resumoProp(iv.cima.aId, 'BA');
+    const resB = this.resumoProp(iv.baixo.aId, 'TO');
+    return [...(resC?.duracoes ?? []), ...(resB?.duracoes ?? [])];
+  }
+
   /** O quadrado está coberto pelo card de soma (BA do último bloco da linha e
    *  TO do primeiro da linha seguinte — o card é desenhado por cima dos dois). */
   quadradoCobertoPorGap(dia: string, horario: string, bloco: BlocoOutput, posicao: PropagandaPosicaoCode): boolean {
@@ -1809,10 +1840,9 @@ export class Grade implements OnInit, OnDestroy {
    *  O texto é SEMPRE o tempo livre do espaço (o tamanho da vaga — propaganda
    *  nenhuma zera isso); o saldo (livre − usado) aparece no tooltip e no card
    *  do intervalo, e o 📢 conta quantas peças já estão naquele espaço.
-   *  Quadrado somado no card do intervalo: vale o intervalo inteiro — o lado de
-   *  cima transborda para o de baixo (a mesma regra do modal), então a sobra é
-   *  a daquele lado já com o transbordo descontado e o 📢 conta as peças dos
-   *  dois lados. */
+   *  Quadrado somado no card do intervalo: vale o intervalo inteiro — a
+   *  propaganda fica no MEIO (metade de cada lado, a mesma regra do modal), a
+   *  sobra é a parcela daquele lado e o 📢 conta as peças dos dois lados. */
   infoTempoLivre(dia: string, horario: string, bloco: BlocoOutput, posicao: PropagandaPosicaoCode): { ativo: boolean; titulo: string; texto: string; qtd: number } {
     const iv = this.intervaloDoQuadrado(dia, horario, bloco, posicao);
     const coberto = iv !== null;
@@ -1824,14 +1854,25 @@ export class Grade implements OnInit, OnDestroy {
       ? (posicao === 'BA' ? iv.capC : iv.capB)
       : (posicao === 'TO' ? this.tempoLivreTopoSeg(bloco, dia, horario) : this.tempoLivreBaixoSeg(bloco, dia, horario));
     const prop = this.resumoProp(bloco.aId, posicao);
-    const usado = prop?.usado ?? 0;
+    // Quadrado somado no card: o intervalo inteiro (as duas filas) é quem
+    // define o quanto este lado descontou — a conta centralizada é a mesma do
+    // card, senão tooltip e card brigam. Fora do intervalo, só o próprio lado.
+    const resumos: PropResumo[] = iv
+      ? ([this.resumoProp(iv.cima.aId, 'BA'), this.resumoProp(iv.baixo.aId, 'TO')].filter(r => r !== null) as PropResumo[])
+      : (prop ? [prop] : []);
+    let usado = prop?.usado ?? 0;
+    if (iv) {
+      const parc = sobrasCentralizadas(iv.capC, iv.capB, this.duracoesDoIntervalo(iv));
+      usado = posicao === 'BA' ? parc.usadoC : parc.usadoB;
+    }
     const restante = Math.max(0, seg - usado);
+    const qtd = resumos.reduce((t, r) => t + r.qtd, 0);
 
     let titulo = coberto
       ? 'Espaço somado no card do intervalo'
       : (seg > 0 ? 'Adicionar propaganda neste espaço' : 'Sem tempo livre');
-    if (prop && prop.qtd > 0) {
-      titulo += `\nPropagandas: ${prop.nomes.join(' · ')}`
+    if (qtd > 0) {
+      titulo += `\nPropagandas: ${resumos.flatMap(r => r.nomes).join(' · ')}`
         + `\nUsado ${this.formatSec(usado)} de ${this.formatSec(seg)} · Resta ${this.formatSec(restante)}`;
     }
 
@@ -1842,7 +1883,7 @@ export class Grade implements OnInit, OnDestroy {
       // com o mesmo tamanho mesmo com propaganda dentro dela); o saldo
       // (livre − usado) fica no tooltip e no card do intervalo.
       texto: seg > 0 ? this.formatSec(seg) : '00:00',
-      qtd: prop?.qtd ?? 0,
+      qtd,
     };
   }
 
@@ -2015,7 +2056,18 @@ export class Grade implements OnInit, OnDestroy {
   readonly nowDaySlot = computed(() => this.linhaService.diaIdx() ?? this.nowDayIndex);
 
   readonly nowMinuteFraction = computed(() => {
-    if (this.nowLineOverride() || this.linhaService.slot()) return 0;
+    // Alturas medidas no layout (grid row 136px): top livre 0.052-0.162,
+    // episódio 0.206-0.794, livre base 0.794-0.949. Mantém fator visual fixo
+    // (as faixas vão das bordas do card, sem salto entre episódio e livre base).
+    const TOP_T = 0.052, TOP_H = 0.154;
+    const EP_T = 0.206, EP_H = 0.588;
+    const BOT_T = 0.794, BOT_H = 0.155;
+
+    // Linha posicionada à mão (clique no horário ou no dia da semana, ou slot
+    // vindo do serviço) abre no começo do EPISÓDIO — topo da faixa visual —
+    // e não no topo do bloco (que seria o início do tempo livre).
+    if (this.nowLineOverride() || this.linhaService.slot()) return EP_T;
+
     const now = this.currentTime();
     const linear = (now.getMinutes() % 30 + now.getSeconds() / 60) / 30;
     const bloco = this.getBlocoAtual();
@@ -2059,13 +2111,6 @@ export class Grade implements OnInit, OnDestroy {
       bottomFreeMin = Math.ceil(livreSec / 2) / 60;
       episodeSliceMin = epSec / 60;
     }
-
-    // Alturas medidas no layout (grid row 136px): top livre 0.052-0.162,
-    // episódio 0.206-0.794, livre base 0.838-0.949. Mantém fator visual fixo
-    // (as faixas vão das bordas do card, sem salto entre episódio e livre base).
-    const TOP_T = 0.052, TOP_H = 0.154;
-    const EP_T = 0.206, EP_H = 0.588;
-    const BOT_T = 0.794, BOT_H = 0.155;
 
     if (topFreeMin > 0 && elapsedSlotMin < topFreeMin) {
       return TOP_T + (elapsedSlotMin / topFreeMin) * TOP_H;

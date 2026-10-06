@@ -63,31 +63,41 @@
         </div>
       </div>
 
-      <!-- Wallets -->
-      <div class="wallets-section">
-        <h2 class="section-title">Envie o Pagamento Para</h2>
-        <div class="wallets-grid">
-          @for (w of wallets; track w.symbol) {
-            <div class="wallet-card">
-              <div class="wallet-header">
-                <span class="wallet-icon" [style.background]="w.color">{{ w.icon }}</span>
-                <div>
-                  <div class="wallet-name">{{ w.coin }}</div>
-                  <div class="wallet-price">{{ w.priceRef }}</div>
+      <!-- Wallets (só as carteiras com endereço preenchido) -->
+      @if (wallets.length > 0) {
+        <div class="wallets-section">
+          <h2 class="section-title">Envie o Pagamento Para</h2>
+          <div class="wallets-grid">
+            @for (w of wallets; track w.symbol) {
+              <div class="wallet-card">
+                <div class="wallet-header">
+                  <span class="wallet-icon" [style.background]="w.color">{{ w.icon }}</span>
+                  <div>
+                    <div class="wallet-name">{{ w.coin }}</div>
+                    <div class="wallet-price">{{ w.priceRef }}</div>
+                  </div>
                 </div>
+                <div class="wallet-address-box">
+                  <code class="wallet-address">{{ w.address }}</code>
+                </div>
+                @if (qrDataUrl(w.address); as url) {
+                  <img [src]="url" class="wallet-qr" alt="QR Code — clique para abrir a carteira"
+                       title="Clique para abrir a carteira" (click)="pagar(w)">
+                } @else {
+                  <div class="wallet-qr" aria-hidden="true" (click)="pagar(w)"></div>
+                }
+                <button type="button" class="wallet-pay-btn" (click)="pagar(w)">
+                  Pagar com carteira
+                </button>
               </div>
-              <div class="wallet-address-box">
-                <code class="wallet-address">{{ w.address }}</code>
-              </div>
-              @if (qrDataUrl(w.address); as url) {
-                <img [src]="url" class="wallet-qr" alt="QR Code">
-              } @else {
-                <div class="wallet-qr" aria-hidden="true"></div>
-              }
-            </div>
+            }
+          </div>
+
+          @if (avisoCarteira(); as aviso) {
+            <p class="metamask-aviso" role="status">{{ aviso }}</p>
           }
         </div>
-      </div>
+      }
 
       <!-- Form -->
       <div class="form-section">

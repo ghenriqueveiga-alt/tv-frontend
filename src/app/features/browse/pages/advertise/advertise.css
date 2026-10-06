@@ -343,3 +343,37 @@ select.field-input {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* QR e bot�o: clique abre a carteira da moeda do card. */
+.wallet-qr {
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.wallet-qr:hover {
+  transform: scale(1.04);
+}
+
+.wallet-pay-btn {
+  margin-top: 0.6rem;
+  padding: 0.5rem 0.9rem;
+  border: none;
+  border-radius: 0.5rem;
+  background: #f7931a;
+  color: #1f2937;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+.wallet-pay-btn:hover {
+  filter: brightness(1.08);
+}
+
+.metamask-aviso {
+  margin-top: 0.9rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #f7931a;
+}

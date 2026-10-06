@@ -6,10 +6,11 @@ import { FormsModule } from '@angular/forms';
 import { ProductService } from '../../../../core/services/product.service';
 import { CartService } from '../../../../core/services/cart.service';
 import { FavoritesService } from '../../../../core/services/favorites.service';
+import { AdSlot } from '../../../../core/components/ad-slot/ad-slot';
 
 @Component({
   selector: 'app-search',
-  imports: [RouterLink, FormsModule],
+  imports: [RouterLink, FormsModule, AdSlot],
   templateUrl: './search.html',
   styleUrl: './search.css',
 })

@@ -22,6 +22,67 @@ export interface PropagandaLado {
   capacidade: number;
 }
 
+/** Estado das duas metades de um intervalo com a propaganda centralizada. */
+export interface ParcelasIntervalo {
+  /** Sobra do lado de cima (metade de baixo do bloco de cima). */
+  C: number;
+  /** Sobra do lado de baixo (metade de topo do bloco de baixo). */
+  B: number;
+  /** Parcela da duração descontada do lado de cima. */
+  usadoC: number;
+  /** Parcela da duração descontada do lado de baixo. */
+  usadoB: number;
+}
+
+/**
+ * Uma propaganda no MEIO do intervalo: a duração é dividida por 2 e a metade
+ * anterior desconta do lado de cima, a metade inferior do de baixo. Se um lado
+ * não comportar a própria metade, o excedente sai do outro — a soma devolvida
+ * é sempre a duração inteira, enquanto ela couber nos dois lados juntos.
+ * Sempre em segundos inteiros (o formataador de tempo não aceita fração).
+ */
+export function parcelaCentralizada(C: number, B: number, seg: number): { c: number; b: number } {
+  const total = Math.max(0, Math.round(seg));
+  const capC = Math.max(0, Math.round(C));
+  const capB = Math.max(0, Math.round(B));
+  if (total === 0) return { c: 0, b: 0 };
+  const meio = Math.floor(total / 2);
+  let c = Math.min(meio, capC);
+  let b = Math.min(total - meio, capB);
+  let falta = total - c - b;
+  if (falta > 0) {
+    const d = Math.min(falta, capC - c);
+    c += d;
+    falta -= d;
+  }
+  if (falta > 0) {
+    const d = Math.min(falta, capB - b);
+    b += d;
+    falta -= d;
+  }
+  return { c, b };
+}
+
+/**
+ * Aplica `parcelaCentralizada` a cada peça na ordem da fila e devolve as sobras
+ * dos dois lados junto com o quanto cada um descontou. É a mesma conta do card
+ * de intervalo da grade e do modal — os dois números têm de bater.
+ */
+export function sobrasCentralizadas(capC: number, capB: number, duracoes: number[]): ParcelasIntervalo {
+  let C = Math.max(0, Math.round(capC));
+  let B = Math.max(0, Math.round(capB));
+  let usadoC = 0;
+  let usadoB = 0;
+  for (const seg of duracoes) {
+    const { c, b } = parcelaCentralizada(C, B, seg);
+    C -= c;
+    B -= b;
+    usadoC += c;
+    usadoB += b;
+  }
+  return { C, B, usadoC, usadoB };
+}
+
 /**
  * Contexto de abertura do modal, montado pela grade:
  *  - `intervalo: true`  → 2 lados (metade de baixo do bloco de cima + metade de
@@ -158,38 +219,29 @@ export class PropagandaModal {
   }
 
   /**
-   * Sobra de cada lado do intervalo aplicando a MESMA regra de gravação: o lado
-   * de cima é preenchido primeiro e o excedente transborda para o de baixo. É o
-   * que permite uma propaganda maior que um único lado — basta caber na soma dos
-   * dois (tempos livres "abaixo do bloco de cima" + "acima do bloco de baixo").
-   * O item em edição fica de fora da conta (o espaço dele volta para a soma).
+   * Sobra de cada lado do intervalo com a propaganda no MEIO: a duração é
+   * dividida por 2, metade para cima e metade para baixo (excedente de um lado
+   * sai do outro). É o que permite uma propaganda maior que um único lado —
+   * basta caber na soma dos dois (tempos livres "abaixo do bloco de cima" +
+   * "acima do bloco de baixo"). O lado gravado não importa para a conta, só
+   * para dizer em qual bloco a peça foi salva. O item em edição fica de fora
+   * (o espaço dele volta para a soma).
    */
   private restosLados(): { C: number; B: number } {
     const ctx = this.contexto();
     if (!ctx) return { C: 0, B: 0 };
     const capacidade = (lado: 'C' | 'B') => ctx.lados.find(l => l.lado === lado)?.capacidade ?? 0;
-    let C = capacidade('C');
-    let B = capacidade('B');
     const editado = this.propEditando();
+    const duracoes: number[] = [];
     for (const p of this.propLista()) {
       if (editado && p.aId === editado.aId) continue;
-      const seg = p.aDuracaoSeg ?? 0;
-      if (this.propItemLado(p) === 'C') {
-        if (seg <= C) {
-          C -= seg;
-        } else {
-          const excedente = seg - C;
-          C = 0;
-          B = Math.max(0, B - excedente);
-        }
-      } else {
-        B = Math.max(0, B - seg);
-      }
+      duracoes.push(p.aDuracaoSeg ?? 0);
     }
+    const { C, B } = sobrasCentralizadas(capacidade('C'), capacidade('B'), duracoes);
     return { C, B };
   }
 
-  /** Sobra de um lado já descontando o transbordo do lado de cima. */
+  /** Sobra de um lado já com a parcela centralizada da propaganda descontada. */
   propRestanteLadoSeg(lado: 'C' | 'B'): number {
     return this.restosLados()[lado];
   }

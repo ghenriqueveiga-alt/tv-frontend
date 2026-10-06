@@ -2,6 +2,7 @@ import { Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { AnuncioService, CreateAnuncioPayload } from '../../../../core/services/anuncio.service';
 import { qrDataUrl as gerarQrDataUrl } from '../../../../core/utils/qr';
+import { pagarComCarteira } from '../../../../core/utils/carteira';
 import { environment } from '../../../../../environments/environment';
 
 @Component({
@@ -32,11 +33,12 @@ export class Advertise {
     valorPago: 0,
   };
 
+  /** Só vira card quem tem endereço preenchido no environment. */
   readonly wallets = [
     { coin: 'Bitcoin', symbol: 'BTC', address: environment.donations.bitcoin, color: '#f7931a', icon: '₿', priceRef: '~$60,000' },
     { coin: 'Ethereum', symbol: 'ETH', address: environment.donations.ethereum, color: '#627eea', icon: 'Ξ', priceRef: '~$3,000' },
     { coin: 'Lightning', symbol: 'LN', address: environment.donations.lightning, color: '#7b61ff', icon: '⚡', priceRef: 'Instant' },
-  ];
+  ].filter(w => !!w.address);
 
   /** QR gerado localmente (mesmo cache do player). */
   readonly qrDataUrl = gerarQrDataUrl;
@@ -48,6 +50,22 @@ export class Advertise {
   ];
 
   selectedPlan = this.plans[0];
+
+  /** Aviso do clique no QR: carteira abrindo, cancelada ou moeda sem suporte. */
+  readonly avisoCarteira = signal<string | null>(null);
+  private avisoTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Clique no QR/botão: abre a carteira da moeda já na tela de pagamento do plano. */
+  async pagar(w: { symbol: string; address: string }): Promise<void> {
+    const resultado = await pagarComCarteira(w.address, w.symbol, this.selectedPlan.price);
+
+    this.avisoCarteira.set(resultado.motivo);
+
+    if (this.avisoTimer !== null) clearTimeout(this.avisoTimer);
+    this.avisoTimer = setTimeout(() => {
+      if (this.avisoCarteira() === resultado.motivo) this.avisoCarteira.set(null);
+    }, 6000);
+  }
 
   selectPlan(plan: typeof this.plans[0]) {
     this.selectedPlan = plan;

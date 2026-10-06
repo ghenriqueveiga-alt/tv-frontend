@@ -42,6 +42,9 @@
     <button (click)="applyFilters()" class="mt-2 w-full bg-blue-600 text-white font-medium py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm cursor-pointer">
       Filtrar
     </button>
+
+    <!-- Banner de anúncio (sidebar, 300x250) -->
+    <app-ad-slot [posicao]="1" />
   </aside>
 
   <!-- Grade de Produtos -->

@@ -7,7 +7,7 @@
   <!-- FIXED QR LEFT -->
   <aside class="qr-fixed-col qr-fixed-left">
     @for (coin of leftCoins; track coin.key) {
-      <div class="crypto-card" [style.--coin-color]="coin.color" style="cursor: pointer;" (click)="openQrModal(coin)">
+      <div class="crypto-card" [style.--coin-color]="coin.color" style="cursor: pointer;" (click)="aoClicarQr(coin)">
         <p class="crypto-coin-name">{{ coin.name }}</p>
         <div class="crypto-qr-placeholder">
           @if (qrDataUrl(coin.address); as url) {
@@ -23,7 +23,7 @@
   <!-- FIXED QR RIGHT -->
   <aside class="qr-fixed-col qr-fixed-right">
     @for (coin of rightCoins; track coin.key) {
-      <div class="crypto-card" [style.--coin-color]="coin.color" style="cursor: pointer;" (click)="openQrModal(coin)">
+      <div class="crypto-card" [style.--coin-color]="coin.color" style="cursor: pointer;" (click)="aoClicarQr(coin)">
         <p class="crypto-coin-name">{{ coin.name }}</p>
         <div class="crypto-qr-placeholder">
           @if (qrDataUrl(coin.address); as url) {
@@ -363,7 +363,7 @@
         <button class="qr-modal-close" (click)="closeQrModal()" aria-label="Fechar">✕</button>
         @if (selectedQr(); as qr) {
           <p class="qr-modal-coin" [style.color]="qr.color">{{ qr.name }}</p>
-          <div class="qr-modal-qr">
+          <div class="qr-modal-qr" (click)="aoClicarQrModal(qr)" title="Clique para abrir a carteira">
             @if (qrDataUrl(qr.address); as url) {
               <img [src]="url" [alt]="qr.name + ' QR'" class="crypto-qr-svg">
             } @else {
@@ -376,13 +376,28 @@
                     (click)="copiarEndereco(qr.address)">
               {{ copiedAddress() === qr.address ? 'Copiado' : 'Copiar endereço' }}
             </button>
-            <p class="qr-modal-hint">Escaneie com a carteira ou copie o endereço</p>
+            @if (podePagarComPhantom(qr)) {
+              <div class="qr-modal-pay">
+                <p class="qr-modal-pay-title">Pagar com Phantom</p>
+                <div class="qr-modal-values">
+                  @for (v of valoresSol; track v) {
+                    <button type="button" class="qr-modal-value" (click)="pagarSolanaValor(qr.address, v)">
+                      {{ v }} SOL
+                    </button>
+                  }
+                </div>
+              </div>
+            }
+            <p class="qr-modal-hint">Escaneie, clique no QR para abrir a carteira ou copie o endereço</p>
           } @else {
             <p class="qr-modal-hint">Carteira ainda não configurada (environment.donations).</p>
           }
         }
       </div>
     </div>
+  }
+  @if (avisoCarteira(); as aviso) {
+    <div class="metamask-toast" role="status">{{ aviso }}</div>
   }
   </div><!-- /tv-stage -->
   </div><!-- /ao-vivo-main -->

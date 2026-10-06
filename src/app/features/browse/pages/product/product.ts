@@ -6,10 +6,11 @@ import { CartService } from '../../../../core/services/cart.service';
 import { FavoritesService } from '../../../../core/services/favorites.service';
 import { ProductService, ProductFull } from '../../../../core/services/product.service';
 import { CategoryService } from '../../../../core/services/category.service';
+import { AdSlot } from '../../../../core/components/ad-slot/ad-slot';
 
 @Component({
   selector: 'app-product',
-  imports: [RouterLink],
+  imports: [RouterLink, AdSlot],
   templateUrl: './product.html',
   styleUrl: './product.css',
 })
