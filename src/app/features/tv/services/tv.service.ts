@@ -167,12 +167,12 @@ export class TvService {
     return this.http.get<EpisodioOutput[]>(`${this.baseUrl}/episodio/primeiro-por-programa`, { params });
   }
 
-  listPrimeirosEpisodiosPorPrograma(programaIds: number[], limite: number = 1, offset: number = 0): Observable<{ aId: number; aNumero: number | null; aTemporada: number | null; aTitulo: string | null; aProgramaId: number; aParte: number | null; aDuracao: string | null }[]> {
+  listPrimeirosEpisodiosPorPrograma(programaIds: number[], limite: number = 1, offset: number = 0): Observable<{ aId: number; aNumero: number | null; aTemporada: number | null; aTitulo: string | null; aProgramaId: number; aParte: number | null; aDuracao: string | null; aArquivoId: number | null }[]> {
     const params = new HttpParams()
       .set('programaIds', programaIds.join(','))
       .set('limite', limite.toString())
       .set('offset', offset.toString());
-    return this.http.get<{ aId: number; aNumero: number | null; aTemporada: number | null; aTitulo: string | null; aProgramaId: number; aParte: number | null; aDuracao: string | null }[]>(`${this.baseUrl}/episodio/primeiros-por-programa`, { params });
+    return this.http.get<{ aId: number; aNumero: number | null; aTemporada: number | null; aTitulo: string | null; aProgramaId: number; aParte: number | null; aDuracao: string | null; aArquivoId: number | null }[]>(`${this.baseUrl}/episodio/primeiros-por-programa`, { params });
   }
 
   streamUrl(id: number): string {

@@ -241,8 +241,19 @@ export class TempoLivre implements OnInit {
       const duracaoSec = pacote.length > 0 ? duracaoPacote(pacote) : 0;
       const isMulti = duracaoSec > 30 * 60 && b.aPrograma.aId !== 35;
       const slots = Math.max(1, Math.ceil(duracaoSec / (30 * 60)));
-      const totalSec = Math.max(0, slots * 30 * 60 - duracaoSec);
+      const totalSlotSec = Math.max(0, slots * 30 * 60 - duracaoSec);
       if (this.onlyMulti() && !isMulti) continue;
+
+      let topoSec = Math.floor(totalSlotSec / 2);
+      let baixoSec = Math.ceil(totalSlotSec / 2);
+      if (isMulti && this.isFimDeSemanaIdx(diaIdx)) {
+        const wk = this.weekendOrder.get(b.aPrograma.aId) ?? [];
+        const pos = wk.findIndex(x => x.aId === b.aId);
+        if (pos >= 0 && wk.length > 0) {
+          topoSec = pos === 0 ? Math.floor(totalSlotSec / 2) : 0;
+          baixoSec = pos === wk.length - 1 ? Math.ceil(totalSlotSec / 2) : 0;
+        }
+      }
 
       out.push({
         blocoId: b.aId,
@@ -254,9 +265,9 @@ export class TempoLivre implements OnInit {
         qtdEps: pacote.length,
         duracaoSec,
         slots,
-        topoSec: Math.floor(totalSec / 2),
-        baixoSec: Math.ceil(totalSec / 2),
-        totalSec,
+        topoSec,
+        baixoSec,
+        totalSec: topoSec + baixoSec,
         isMulti,
       });
     }

@@ -20,6 +20,7 @@ interface EpisodioInfo {
   aParte: number | null;
   aTitulo: string | null;
   aDuracao?: string | null;
+  aArquivoId?: number | null;
 }
 
 /** Janela de propaganda do intervalo: metade do tempo livre centrada na soma
@@ -164,6 +165,10 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
   readonly currentBloco = signal<BlocoOutput | null>(null);
   readonly currentEpisodio = signal<EpisodioInfo | null>(null);
   readonly videoUrl = signal<string | null>(null);
+  /** O elemento <video> está buscando/bufferizando (evita tela preta sem contexto). */
+  readonly videoLoading = signal(false);
+  /** Último erro do elemento <video>, em texto amigável (null = sem erro). */
+  readonly videoError = signal<string | null>(null);
   readonly seekSeconds = signal(0);
   readonly isReprise = signal(false);
   readonly waitSeconds = signal(0);
@@ -217,6 +222,8 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
   /** Momento da última mudança real de posição do vídeo. */
   private lastProgressAt = 0;
   private lastProgressPos = -1;
+  /** Último fim de buffer observado: dados chegando = progresso (rede lenta). */
+  private lastBufferedEnd = 0;
   private recoverAttempts = 0;
   private nextRecoverAt = 0;
   /** O vídeo já andou alguma coisa (distingue primeira carga de travamento). */
@@ -427,8 +434,10 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     const slipRun = new Map<number, number>();
     const contados = new Set<string>();
     for (let p = 0; p <= paginaAlvo; p++) {
+    slipRun.clear();
     for (const dia of this.dias) {
       const dIdx = this.dias.indexOf(dia);
+      if (this.isFimDeSemana(dia)) continue;
       for (const t of horarios) {
         const cellBlocos = dbByDayTime.get(`${this.normalizeDia(dia)}|${t}`);
         if (!cellBlocos) continue;
@@ -582,9 +591,10 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     document.addEventListener('click', this.docClickHandler);
     this.loadBlocos();
 
-    // Pub/sub: a grade avisa quando criar/editar/remover propaganda.
+    // Pub/sub: a grade avisa quando criar/editar/remover propaganda. O SSE só
+    // ACELERA a rebusca (adForce); tickPropaganda continua rebuscando sozinho
+    // para quando o evento não chegar (conexão zumbi, aba suspensa, proxy).
     this.sseSub = this.propagandaService.atualizacoes().subscribe(evt => {
-      this.sseAtivo = evt.conectado;
       if (evt.mudou && this.freeGapActive) {
         this.adForce = true;
         this.tickPropaganda();
@@ -678,6 +688,7 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
                 aParte: row.aParte,
                 aTitulo: row.aTitulo,
                 aDuracao: (row as any).aDuracao ?? null,
+                aArquivoId: (row as any).aArquivoId ?? null,
               });
             }
             for (const [pid, eps] of grouped) {
@@ -1030,7 +1041,20 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     this.videoStarted = false;
     this.lastProgressPos = -1;
     this.lastProgressAt = 0;
+    this.lastBufferedEnd = 0;
     this.videoUrl.set(null);
+
+    // Caminho rápido: a listagem de episódios já traz o arquivo, então o vídeo
+    // começa sem esperar a chamada extra de detalhe do episódio (1 RTT a menos
+    // entre a troca de bloco e o primeiro frame — pesado no .onion).
+    const arquivoId = ep.aArquivoId;
+    if (arquivoId) {
+      this._suppressAutoPlay = false;
+      this._endedProgramId = null;
+      this.videoEnded.set(false);
+      this.setStreamUrl(arquivoId);
+      return;
+    }
 
     this.playerService.getEpisodio(ep.aId).subscribe({
       next: (fullEp) => {
@@ -1040,13 +1064,27 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
           // Trocou de episódio/página: o novo vídeo tem que tocar mesmo que o
           // anterior tivesse terminado (onVideoLoaded pausa se videoEnded).
           this.videoEnded.set(false);
-          this.videoUrl.set(this.playerService.streamUrl(fullEp.aArquivo.aId));
+          this.setStreamUrl(fullEp.aArquivo.aId);
         }
       },
       error: () => {
         setTimeout(() => this.loadVideo(programaId, dia), 3000);
       },
     });
+  }
+
+  /**
+   * Aponta o <video> para o stream já na posição certa (`#t=`). Sem o fragmento
+   * o navegador baixa do byte 0 e SÓ DEPOIS busca o offset do "agora": em rede
+   * lenta (.onion/celular) isso dobra a cadeia de requisições até o primeiro
+   * frame e a tela fica preta mais tempo.
+   */
+  private setStreamUrl(arquivoId: number): void {
+    const seek = this.seekSeconds();
+    const fragmento = seek > 0 ? `#t=${Math.floor(seek)}` : '';
+    this.videoLoading.set(true);
+    this.videoError.set(null);
+    this.videoUrl.set(this.playerService.streamUrl(arquivoId) + fragmento);
   }
 
   private episodioPagina0(bloco: BlocoOutput, diaIdx: number, pagina?: number): EpisodioInfo | null {
@@ -1086,10 +1124,16 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     }
 
     if (this.isFimDeSemana(diaName)) {
-      const weekendBlocos = this.blocos.filter(b =>
-        b.aStatusCode === 'AT' && b.aPrograma?.aId === programmaId &&
-        this.normalizeDia(b.aDiaSemanaDesc ?? '') === this.normalizeDia(diaName)
-      ).sort((a, b) => (a.aHorario ?? '').localeCompare(b.aHorario ?? ''));
+      const dayOf = (b: BlocoOutput): number => {
+        const d = b.aDiaSemanaDesc ?? '';
+        const i = this.dias.indexOf(d);
+        return i >= 0 ? i : this.dias.findIndex(x => this.normalizeDia(x) === this.normalizeDia(d));
+      };
+      const weekendBlocos = this.blocos.filter(b => {
+        if (b.aStatusCode !== 'AT' || b.aPrograma?.aId !== programmaId) return false;
+        const d = dayOf(b);
+        return d === 5 || d === 6;
+      }).sort((a, b) => dayOf(a) - dayOf(b) || (a.aHorario ?? '').localeCompare(b.aHorario ?? ''));
       const numSlots = weekendBlocos.length;
       if (numSlots === 0) return null;
       const slotOffset = weekendBlocos.findIndex(b => b.aId === bloco.aId);
@@ -1264,6 +1308,14 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
 
   onVideoError(): void {
     if (!this.videoUrl() || this.videoEnded()) return;
+    const code = this.videoRef?.nativeElement?.error?.code;
+    const textos: Record<number, string> = {
+      1: 'carregamento interrompido',
+      2: 'falha de rede ao baixar o vídeo',
+      3: 'o aparelho não conseguiu decodificar o vídeo',
+      4: 'formato de vídeo não suportado',
+    };
+    this.videoError.set(textos[code ?? 0] ?? 'erro ao carregar o vídeo');
     this.recoverPlayback();
   }
 
@@ -1276,6 +1328,7 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     if (!this.videoUrl()) {
       this.lastProgressPos = -1;
       this.lastProgressAt = 0;
+      this.lastBufferedEnd = 0;
       this.recoverAttempts = 0;
       this.videoStarted = false;
       return;
@@ -1291,6 +1344,14 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     }
 
     const agora = Date.now();
+    // Dados chegando (buffer crescendo) é progresso, mesmo com o relógio do
+    // vídeo parado: em rede lenta o primeiro frame demora e o recarregamento
+    // automático no meio da busca mataria a reprodução (tela preta pra sempre).
+    const bEnd = this.bufferedEnd(video);
+    if (bEnd > this.lastBufferedEnd + 0.25) {
+      this.lastBufferedEnd = bEnd;
+      this.lastProgressAt = agora;
+    }
     const pos = video.currentTime;
     if (pos !== this.lastProgressPos) {
       this.lastProgressPos = pos;
@@ -1299,7 +1360,7 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
       if (agora > this.nextRecoverAt) this.recoverAttempts = 0;
     } else if (!this.lastProgressAt) {
       this.lastProgressAt = agora;
-    } else if (agora - this.lastProgressAt >= (this.videoStarted ? 8000 : 20000)) {
+    } else if (agora - this.lastProgressAt >= (this.videoStarted ? 8000 : 45000)) {
       this.recoverPlayback();
       return;
     }
@@ -1330,6 +1391,7 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
     this.recoverySeek = this.wallEdge();
     this.lastProgressAt = agora;
     this.lastProgressPos = video.currentTime;
+    this.lastBufferedEnd = 0;
     try {
       video.load();
     } catch {}
@@ -1368,15 +1430,11 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
   private adPending = false;
   /** Invalida respostas de fetch quando o slate se fecha. */
   private adToken = 0;
-  /** Rebusca agendada (fallback quando o canal SSE está fora), em ms. */
+  /** Periodicidade da rebusca da lista enquanto o slate está aberto, em ms. */
   private readonly adRefreshMs = 3000;
   private adLastFetchAt = 0;
   /** Um aviso do SSE pediu rebusca imediata. */
   private adForce = false;
-  /** A última rebusca falhou: continua no fallback mesmo com SSE aberto. */
-  private adErroFetch = false;
-  /** Canal SSE de propaganda ligado (pub/sub no lugar do polling). */
-  private sseAtivo = false;
   private sseSub?: Subscription;
   /** Lados e total do gap congelados na abertura do slate. */
   private adLados: { blocoId: number; posicao: PropagandaPosicaoCode }[] | null = null;
@@ -1421,10 +1479,11 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
 
   /**
    * Abre/atualiza/fecha a janela de propaganda do slate: ao entrar no intervalo
-   * congela lados (BA do bloco atual + TO do próximo; só TO quando o slate é de
-   * espera antes do conteúdo) e a duração total, e busca as propagandas —
-   * rebuscando a cada `adRefreshMs` enquanto o slate está aberto, para o que a
-   * grade cadastrar ou remover em tempo de intervalo valer na hora.
+   * congela lados (BA do bloco atual + TO do próximo; na espera antes do
+   * conteúdo, BA da linha anterior + TO do atual) e a duração total, e busca
+   * as propagandas — rebuscando a cada `adRefreshMs` enquanto o slate está
+   * aberto (o SSE só acelera), para o que a grade cadastrar ou remover em
+   * tempo de intervalo valer na hora.
    */
   private tickPropaganda(): void {
     if (!this.freeGapActive) {
@@ -1432,7 +1491,6 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
       this.adWindow.set(null);
       this.adPending = false;
       this.adForce = false;
-      this.adErroFetch = false;
       this.adLados = null;
       this.adGapTotal = 0;
       this.adLastFetchAt = 0;
@@ -1449,10 +1507,9 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
 
     const agora = Date.now();
     if (this.adWindow() && !this.adForce) {
-      // Com o canal SSE aberto a lista só muda por aviso do backend; sem ele
-      // (ou depois de uma rebusca falhar) cai no fallback de adRefreshMs.
-      const fallback = !this.sseAtivo || this.adErroFetch;
-      if (!fallback) return;
+      // O SSE acelera via adForce; sem depender dele, a lista rebusca a cada
+      // adRefreshMs — evento perdido (conexão zumbi, aba suspensa) não deixa
+      // a janela presa na lista antiga até o fim do intervalo.
       if (agora - this.adLastFetchAt < this.adRefreshMs) return;
     }
     this.adForce = false;
@@ -1464,9 +1521,8 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
       next: respostas => {
         this.adPending = false;
         if (token !== this.adToken || !this.freeGapActive) return;
-        this.adErroFetch = false;
-        // Lados vêm na ordem do gap (BA do atual, depois TO do próximo):
-        // ordena só dentro de cada lado, senão as filas se misturam.
+        // Os lados vêm na ordem do gap (de cima, depois de baixo): ordena só
+        // dentro de cada lado, senão as filas se misturam.
         const itens = respostas
           .flatMap(r => [...(r.aPropagandas ?? [])].sort((a, b) => (a.aOrdem ?? 0) - (b.aOrdem ?? 0)))
           .filter(p => (p.aDuracaoSeg ?? 0) > 0);
@@ -1482,7 +1538,6 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
       error: () => {
         this.adPending = false;
         if (token !== this.adToken || !this.freeGapActive) return;
-        this.adErroFetch = true;
         // Mantém a última lista boa; sem nada ainda, o slate fica "Tempo livre".
         if (!this.adWindow()) {
           this.adWindow.set({ gapTotal: this.adGapTotal, winStart: 0, winEnd: 0, itens: [] });
@@ -1495,13 +1550,47 @@ export class PlayerAoVivo implements OnInit, OnDestroy {
   private calcularLadosGap(): { blocoId: number; posicao: PropagandaPosicaoCode }[] | null {
     const atual = this.currentBloco();
     if (!atual) return null;
-    if (this.waitSeconds() > 0) return [{ blocoId: atual.aId, posicao: 'TO' }];
+    if (this.waitSeconds() > 0) {
+      // Espera no topo do slot: o slate é a CAUDA do intervalo anterior e a
+      // grade grava o card de soma em [BA da linha anterior, TO desta] — a
+      // peça nova entra no lado de cima, então só o TO deixaria a rebusca vazia.
+      const lados: { blocoId: number; posicao: PropagandaPosicaoCode }[] = [];
+      const anterior = this.blocoLinhaAnterior(atual);
+      if (anterior && anterior.aId !== atual.aId) lados.push({ blocoId: anterior.aId, posicao: 'BA' });
+      lados.push({ blocoId: atual.aId, posicao: 'TO' });
+      return lados;
+    }
     const lados: { blocoId: number; posicao: PropagandaPosicaoCode }[] = [
       { blocoId: atual.aId, posicao: 'BA' },
     ];
     const prox = this.nextBloco;
     if (prox && prox.aId !== atual.aId) lados.push({ blocoId: prox.aId, posicao: 'TO' });
     return lados;
+  }
+
+  /** Bloco da linha (horário) imediatamente anterior ao do bloco dado — o
+   *  mesmo par do card de soma da grade. A grade é de 30 em 30 min com uma
+   *  célula por (dia, horário): a linha anterior é a anterior no conjunto
+   *  global de horários; sem bloco ATivo nela no dia, o card da grade também
+   *  não existe e o quadrado individual grava só no TO do atual. */
+  private blocoLinhaAnterior(atual: BlocoOutput): BlocoOutput | null {
+    const dia = atual.aDiaSemanaDesc;
+    const h = atual.aHorario?.substring(0, 5);
+    if (!dia || !h) return null;
+    let prev = '';
+    for (const b of this.blocos) {
+      const t = b.aHorario?.substring(0, 5);
+      if (t && t < h && t > prev) prev = t;
+    }
+    if (!prev) return null;
+    const gradeId = atual.aGrade?.aId;
+    const daLinha = this.blocos.filter(b =>
+      b.aStatusCode === 'AT' &&
+      b.aDiaSemanaDesc &&
+      this.normalizeDia(b.aDiaSemanaDesc) === this.normalizeDia(dia) &&
+      b.aHorario?.substring(0, 5) === prev &&
+      (!gradeId || b.aGrade?.aId === gradeId));
+    return daLinha.length ? daLinha[daLinha.length - 1] : null;
   }
 
   private adElapsed(): number {

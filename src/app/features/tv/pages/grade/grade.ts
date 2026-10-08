@@ -1,4 +1,4 @@
-import { Component, signal, computed, inject, OnInit, OnDestroy, ChangeDetectionStrategy, ChangeDetectorRef, ViewChild, ElementRef } from '@angular/core';
+import { Component, signal, computed, inject, OnInit, OnDestroy, ChangeDetectionStrategy, ChangeDetectorRef, ViewChild, ElementRef, HostListener } from '@angular/core';
 import { Router, RouterLink, ActivatedRoute } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
@@ -71,6 +71,40 @@ interface IntervaloQuadrado {
   capC: number;
   capB: number;
 }
+
+/** Cores base do estilo da grade: só estas viram <input type="color"> no painel
+ *  🎨 e são injetadas no template como as variáveis --g-*; todo o resto (texto
+ *  secundário, superfície alternada, hovers) o CSS deriva com color-mix. */
+interface TemaGrade {
+  /** Fundo da página. */
+  bg: string;
+  /** Header, cards, cabeçalho de dia e barra de páginas. */
+  surface: string;
+  border: string;
+  text: string;
+  /** Aba ativa, setas, ícone do header e "hoje". */
+  accent: string;
+  /** Barra vermelha do horário atual. */
+  now: string;
+}
+
+/** Temas prontos: um clique troca as 6 cores de uma vez. */
+const TEMAS: { id: string; nome: string; cores: TemaGrade }[] = [
+  { id: 'claro', nome: 'Claro', cores: { bg: '#f8fafc', surface: '#ffffff', border: '#e2e8f0', text: '#0f172a', accent: '#0f172a', now: '#ef4444' } },
+  { id: 'escuro', nome: 'Escuro', cores: { bg: '#0f172a', surface: '#1e293b', border: '#334155', text: '#e2e8f0', accent: '#2563eb', now: '#ef4444' } },
+  { id: 'noturno', nome: 'Noturno', cores: { bg: '#0b1120', surface: '#131c31', border: '#24304d', text: '#dbeafe', accent: '#3b82f6', now: '#f43f5e' } },
+  { id: 'contraste', nome: 'Contraste', cores: { bg: '#ffffff', surface: '#ffffff', border: '#000000', text: '#000000', accent: '#000000', now: '#d00000' } },
+];
+
+/** Ordem e rótulo dos campos de cor do painel. */
+const CAMPOS_TEMA: { chave: keyof TemaGrade; nome: string }[] = [
+  { chave: 'bg', nome: 'Fundo' },
+  { chave: 'surface', nome: 'Cards' },
+  { chave: 'border', nome: 'Bordas' },
+  { chave: 'text', nome: 'Texto' },
+  { chave: 'accent', nome: 'Destaque' },
+  { chave: 'now', nome: 'Barra agora' },
+];
 
 @Component({
   selector: 'app-grade',
@@ -380,6 +414,12 @@ export class Grade implements OnInit, OnDestroy {
   private weekendBlocosCache = new Map<number, BlocoOutput[]>();
   private displacedEpisodeShift = new Map<number, number>();
   private deslocamentos: { programaId: number; pagina: number; dia: number }[] = [];
+  /** Histórico de exibição para o badge "Reprise" do caminho genérico:
+   *  programa → aId do episódio → menor célula (página*7+dia) em que ele foi
+   *  realmente exibido. Montado no computeSlipCascade, que já simula todas as
+   *  páginas 0..currentPage — dispensa o deslize acumulado (que podia criar
+   *  Reprise falso quando o deslize voltava/andava além da lista). */
+  private repriseHist = new Map<number, Map<number, number>>();
 
   readonly modalOpen = signal(false);
   readonly modalDia = signal('');
@@ -432,6 +472,80 @@ export class Grade implements OnInit, OnDestroy {
     { code: 'MA', desc: 'Maratona' },
     { code: 'ES', desc: 'Especial' },
   ];
+
+  /* ── Estilo da grade (botão 🎨) ──────────────────────────────────────────
+     Preset + sobrescrições livres, gravados no localStorage. Lido no campo
+     inicializador (antes do primeiro render) para não piscar no tema salvo. */
+  private static readonly TEMA_KEY = 'grade-tema';
+
+  private static lerTema(): { id: string; custom: Partial<TemaGrade> | null } {
+    const padrao = { id: 'claro', custom: null } as const;
+    try {
+      const bruto = localStorage.getItem(Grade.TEMA_KEY);
+      if (!bruto) return { ...padrao };
+      const dados = JSON.parse(bruto) as { id?: unknown; custom?: unknown };
+      const id = typeof dados.id === 'string' && TEMAS.some((t) => t.id === dados.id) ? dados.id : 'claro';
+      const custom = dados.custom && typeof dados.custom === 'object'
+        ? (dados.custom as Partial<TemaGrade>)
+        : null;
+      return { id, custom };
+    } catch {
+      return { ...padrao };
+    }
+  }
+
+  private readonly temaSalvo = Grade.lerTema();
+
+  readonly temas = TEMAS;
+  readonly camposTema = CAMPOS_TEMA;
+  readonly temaPainel = signal(false);
+  readonly temaId = signal<string>(this.temaSalvo.id);
+  readonly temaCustom = signal<Partial<TemaGrade> | null>(this.temaSalvo.custom);
+
+  /** Cores efetivas: preset escolhido + o que o usuário sobrescreveu. */
+  readonly tema = computed<TemaGrade>(() => {
+    const preset = TEMAS.find((t) => t.id === this.temaId()) ?? TEMAS[0];
+    return { ...preset.cores, ...(this.temaCustom() ?? {}) };
+  });
+
+  escolherTema(id: string): void {
+    this.temaId.set(id);
+    this.temaCustom.set(null);
+    this.salvarTema();
+  }
+
+  aplicarCor(chave: keyof TemaGrade, valor: string): void {
+    if (!valor) return;
+    this.temaCustom.set({ ...(this.temaCustom() ?? {}), [chave]: valor });
+    this.salvarTema();
+  }
+
+  restaurarTema(): void {
+    this.temaId.set('claro');
+    this.temaCustom.set(null);
+    this.salvarTema();
+  }
+
+  alternarPainelTema(): void {
+    this.temaPainel.update((aberto) => !aberto);
+  }
+
+  /** Clicou fora do painel (ou do botão) → fecha. */
+  @HostListener('document:click', ['$event'])
+  fecharPainelTema(ev: MouseEvent): void {
+    if (!this.temaPainel()) return;
+    const alvo = ev.target as HTMLElement | null;
+    if (alvo?.closest('.tema-painel, .tema-btn')) return;
+    this.temaPainel.set(false);
+  }
+
+  private salvarTema(): void {
+    try {
+      localStorage.setItem(Grade.TEMA_KEY, JSON.stringify({ id: this.temaId(), custom: this.temaCustom() }));
+    } catch {
+      // Navegador em modo privado: o tema vale só nesta sessão.
+    }
+  }
 
   ngOnInit(): void {
     const qp = this.route.snapshot.queryParamMap.get('page');
@@ -552,8 +666,48 @@ export class Grade implements OnInit, OnDestroy {
     return flat[idx];
   }
 
+  /** Registra que `episodioId` foi exibido na célula `pagina*7+dia`
+   *  (guarda a menor célula — a primeira exibição). */
+  private registrarReprise(programaId: number, episodioId: number, celula: number): void {
+    let m = this.repriseHist.get(programaId);
+    if (!m) {
+      m = new Map<number, number>();
+      this.repriseHist.set(programaId, m);
+    }
+    const atual = m.get(episodioId);
+    if (atual === undefined || celula < atual) m.set(episodioId, celula);
+  }
+
+  /** Slots consumidos por um episódio longo exibido em `t` — mesmo espelho do
+   *  computeEffectiveSchedule: marca t+30..t+(n-1)*30 na célula `p|d` (sem
+   *  porta para existir bloco ali, igual ao consumedSlots original). */
+  private marcarConsumidos(
+    consumed: Map<string, Set<string>>,
+    chaveCelula: string,
+    t: string,
+    duracao: string | null,
+  ): void {
+    const dur = this.parseDuracaoSec(duracao);
+    if (dur <= 30 * 60) return;
+    const need = Math.ceil(dur / (30 * 60));
+    let set = consumed.get(chaveCelula);
+    if (!set) {
+      set = new Set<string>();
+      consumed.set(chaveCelula, set);
+    }
+    for (let s = 1; s < need; s++) {
+      const ct = this.addTime(t, s * 30);
+      if (ct <= t) continue;
+      set.add(ct);
+    }
+  }
+
   private computeSlipCascade(): void {
     this.deslocamentos = [];
+    this.repriseHist.clear();
+    // O histórico lê weekendBlocosFor: os caches de fim de semana precisam
+    // existir antes (no load inicial o build vinha só depois deste cascata).
+    this.buildSameDayBlocosCache();
     const diasIndice = new Map(this.dias.map((d, i) => [d, i]));
     const diasIndiceNorm = new Map(this.dias.map((d, i) => [this.normalizeDia(d), i]));
     const dbSchedule = new Map<string, BlocoOutput[]>();
@@ -567,19 +721,58 @@ export class Grade implements OnInit, OnDestroy {
     const sortedHorarios = [...this.horarios].sort((a, b) => a.localeCompare(b));
     const slipRun = new Map<number, number>();
     const contados = new Set<string>();
+    // Deslocamentos por programa vistos até agora: o deslize do display
+    // (contarDeslocamentosAntes) só conta células estritamente anteriores,
+    // então um retrato por dia basta para reproduzi-lo em qualquer célula.
+    const deslocAcima = new Map<number, number>();
+    const consumed = new Map<string, Set<string>>();
     for (let p = 0; p <= this.currentPage(); p++) {
       // Reset slipRun a cada página para evitar acúmulo acumulado
       slipRun.clear();
       for (let d = 0; d < 7; d++) {
+        const slipDia = new Map(deslocAcima);
+        const chaveCelula = `${p}|${d}`;
         for (const t of sortedHorarios) {
           const cellBlocos = dbSchedule.get(`${d}|${t}`);
           if (!cellBlocos) continue;
           for (const bloco of cellBlocos) {
-            if (!bloco.aPrograma || bloco.aPrograma.aId === 35) continue;
-            // Fim de semana nunca espalha. Horários flat de segunda a sexta
-            // espalham sim: o episódio deles vem da lista flat, já para a
-            // página p que está sendo simulada (senão o deslocamento dos
-            // programas ocupados por ele nunca seria registrado).
+            if (!bloco.aPrograma) continue;
+            const pid = bloco.aPrograma.aId;
+            // ── exibição real desta célula: alimenta o badge "Reprise" e o
+            //    consumo da grade. Blocos em células consumidas somem da tela
+            //    (espalhador anterior os remove), exceto o programa 35, que o
+            //    computeEffectiveSchedule nunca tira nem deixa consumir. ──
+            const escondido = pid !== 35 && (consumed.get(chaveCelula)?.has(t) ?? false);
+            if (!escondido) {
+              if (this.isWeekendBloco(bloco)) {
+                const epsW = this.allEpisodiosMap.get(pid);
+                const wk = this.weekendBlocosFor(pid, d);
+                const slotOffset = wk.findIndex(b => b.aId === bloco.aId);
+                if (epsW && epsW.length > 0 && slotOffset >= 0) {
+                  const idxW = (((p * wk.length + slotOffset) % epsW.length) + epsW.length) % epsW.length;
+                  this.registrarReprise(pid, epsW[idxW].aId, p * 7 + d);
+                }
+              } else if (this.isAnyFlatHorario(bloco)) {
+                // Sequências flat combinam programas numa lista própria: o
+                // badge genérico não as lê, então não registra o índice delas.
+                // O consumo delas esconde os vizinhos, sim.
+                if (pid !== 35) {
+                  this.marcarConsumidos(consumed, chaveCelula, t, this.episodioFlatParaPagina(bloco, d, p)?.aDuracao ?? null);
+                }
+              } else {
+                const eps = this.allEpisodiosMap.get(pid);
+                const diasQ = this.diasProgramaMap.get(pid);
+                const dayPos = diasQ ? diasQ.indexOf(d) : -1;
+                if (eps && eps.length > 0 && diasQ && diasQ.length > 0 && dayPos >= 0) {
+                  const globalIdx = inicioSlot(`ep-${pid}`, eps, p, dayPos, this.pageStep(pid));
+                  const idxDisp = (((globalIdx - (slipDia.get(pid) ?? 0)) % eps.length) + eps.length) % eps.length;
+                  this.registrarReprise(pid, eps[idxDisp].aId, p * 7 + d);
+                  if (pid !== 35) this.marcarConsumidos(consumed, chaveCelula, t, eps[idxDisp].aDuracao);
+                }
+              }
+            }
+            // ── cascata de deslocamentos (inalterada) ──
+            if (pid === 35) continue;
             if (this.isWeekendBloco(bloco)) continue;
             let ep: EpisodioInfo | null;
             if (this.isAnyFlatHorario(bloco)) {
@@ -610,6 +803,7 @@ export class Grade implements OnInit, OnDestroy {
                 contados.add(ck);
                 this.deslocamentos.push({ programaId: disp.aPrograma.aId, pagina: p, dia: d });
                 slipRun.set(disp.aPrograma.aId, (slipRun.get(disp.aPrograma.aId) ?? 0) + 1);
+                deslocAcima.set(disp.aPrograma.aId, (deslocAcima.get(disp.aPrograma.aId) ?? 0) + 1);
               }
             }
           }
@@ -1091,6 +1285,27 @@ export class Grade implements OnInit, OnDestroy {
     return ep ? [ep] : null;
   }
 
+  /** Duração ausente ou zerada — o empacotamento (pacoteBloco/tamanhoBloco)
+   *  para no episódio e o restante da grade desalinha. */
+  duracaoInvalida(duracao: string | null): boolean {
+    return !duracao || this.parseDuracaoSec(duracao) <= 0;
+  }
+
+  /** Algum episódio exibido no bloco está sem duração (ou zerado)? */
+  blocoSemDuracao(bloco: BlocoOutput, dia: string): boolean {
+    const eps = this.episodiosDoBloco(bloco, dia);
+    return !!eps && eps.some(ep => this.duracaoInvalida(ep.aDuracao));
+  }
+
+  /** Tooltip dos cards/modal: quais episódios do bloco estão sem duração. */
+  tituloSemDuracao(bloco: BlocoOutput, dia: string): string {
+    const eps = this.episodiosDoBloco(bloco, dia) ?? [];
+    const inv = eps.filter(ep => this.duracaoInvalida(ep.aDuracao));
+    const cods = inv.map(ep => this.epCodigo(ep)).join(', ');
+    const plural = inv.length > 1 ? 's' : '';
+    return `Episódio${plural} sem duração no banco: ${cods} — o empacotamento do bloco para aqui.`;
+  }
+
   /** Soma das durações dos episódios do bloco (0 quando não há duração). */
   private duracaoPacoteSec(bloco: BlocoOutput, dia: string): number {
     const p = this.episodiosDoBloco(bloco, dia);
@@ -1442,11 +1657,25 @@ export class Grade implements OnInit, OnDestroy {
     return Math.max(0, totalSlotSec - totalSec);
   }
 
+  private posicaoWeekend(bloco: BlocoOutput, dia: string): { pos: number; total: number } {
+    const pid = bloco.aPrograma?.aId;
+    if (!pid) return { pos: 0, total: 1 };
+    const dIdx = this.diasIndice.get(dia) ?? this.diasIndiceNorm.get(this.normalizeDia(dia)) ?? -1;
+    if (dIdx < 0) return { pos: 0, total: 1 };
+    const wk = this.weekendBlocosFor(pid, dIdx);
+    const pos = wk.findIndex(b => b.aId === bloco.aId);
+    if (pos < 0 || wk.length === 0) return { pos: 0, total: 1 };
+    return { pos, total: wk.length };
+  }
+
   /** Segundos livres na parte de cima da célula (metade dianteira do ocioso). */
   private tempoLivreTopoSeg(bloco: BlocoOutput, dia: string, horario?: string): number {
     if (this.isMultiBloco(bloco, dia)) {
       const h = horario ?? bloco.aHorario?.substring(0, 5) ?? '';
-      if (this.slotIndex(dia, h) !== 0) return 0;
+      const primeiro = this.isFimDeSemana(dia)
+        ? this.posicaoWeekend(bloco, dia).pos === 0
+        : this.slotIndex(dia, h) === 0;
+      if (!primeiro) return 0;
       const ep = this.getEpisodio(bloco, dia);
       if (!ep) return 0;
       return Math.max(0, Math.floor(this.multiBlocoFreeTime(ep) / 2));
@@ -1464,7 +1693,12 @@ export class Grade implements OnInit, OnDestroy {
       return Math.max(0, Math.ceil(this.tempoLivrePacoteSeg(bloco, dia) / 2));
     }
     const h = horario ?? bloco.aHorario?.substring(0, 5) ?? '';
-    if (this.slotIndex(dia, h) !== this.slotsForEpisode(ep) - 1) return 0;
+    if (this.isFimDeSemana(dia)) {
+      const { pos, total } = this.posicaoWeekend(bloco, dia);
+      if (pos !== total - 1) return 0;
+    } else if (this.slotIndex(dia, h) !== this.slotsForEpisode(ep) - 1) {
+      return 0;
+    }
     return Math.max(0, Math.ceil(this.multiBlocoFreeTime(ep) / 2));
   }
 
@@ -1498,11 +1732,10 @@ export class Grade implements OnInit, OnDestroy {
    *  propaganda o texto é a SOMA das durações das peças dos dois lados (BA do
    *  último bloco da linha + TO do primeiro da seguinte) e os parênteses trazem
    *  o tempo restante; sem propaganda o texto é o tempo livre do intervalo. O
-   *  tooltip lista cada peça. `null` = não desenha o card (fim de semana,
-   *  extremos ou soma zero — a mesma regra de quando o intervalo cobre um
-   *  quadrado, em `intervaloDoQuadrado`). */
+   *  tooltip lista cada peça. `null` = não desenha o card (extremos ou soma
+   *  zero — a mesma regra de quando o intervalo cobre um quadrado, em
+   *  `intervaloDoQuadrado`). */
   gapResumo(dia: string, horario: string): GapResumo | null {
-    if (this.isFimDeSemana(dia)) return null;
     const i = this.horarios.indexOf(horario);
     const proxHorario = i >= 0 ? this.horarios[i + 1] : undefined;
     if (!proxHorario) return null;
@@ -1541,14 +1774,9 @@ export class Grade implements OnInit, OnDestroy {
   }
 
   /** 52 px = "Livre" de baixo (15) + folga entre as células (8) + "Livre" de
-   *  cima da linha seguinte (15) + padding/borda das duas células (7 + 7).
-   *  Quando uma faixa de período separa as duas linhas, ela ocupa 44 px no
-   *  lugar dos 8 px de folga: 52 + 36 = 88. */
-  gapAltura(horario: string): number {
-    const i = this.horarios.indexOf(horario);
-    const prox = i >= 0 ? this.horarios[i + 1] : undefined;
-    if (!prox || !this.showFaixaHeader(prox, i + 1)) return 52;
-    return 88;
+   *  cima da linha seguinte (15) + padding/borda das duas células (7 + 7). */
+  gapAltura(): number {
+    return 52;
   }
 
   formatDuracao(duracao: string | null): string {
@@ -1630,11 +1858,6 @@ export class Grade implements OnInit, OnDestroy {
       if (horario >= this.faixaRanges[i].inicio) return this.faixaRanges[i].icon;
     }
     return '📺';
-  }
-
-  showFaixaHeader(horario: string, index: number): boolean {
-    if (index === 0) return true;
-    return this.faixaNome(horario) !== this.faixaNome(this.horarios[index - 1]);
   }
 
   openCellModal(dia: string, horario: string): void {
@@ -1763,8 +1986,7 @@ export class Grade implements OnInit, OnDestroy {
 
   /** Informações do card de soma (gap) entre esta linha da grade e a seguinte:
    *  metade de baixo do último bloco da linha + metade de topo do primeiro da
-   *  próxima. Retorna null quando não existe card (fim de semana, extremos ou
-   *  soma zero). */
+   *  próxima. Retorna null quando não existe card (extremos ou soma zero). */
   gapInfo(dia: string, horario: string): PropagandaGap | null {
     const i = this.horarios.indexOf(horario);
     const proxHorario = i >= 0 ? this.horarios[i + 1] : undefined;
@@ -1796,7 +2018,7 @@ export class Grade implements OnInit, OnDestroy {
    *  guardado). Null = o quadrado não está coberto. */
   private intervaloDoQuadrado(dia: string, horario: string, bloco: BlocoOutput, posicao: PropagandaPosicaoCode): IntervaloQuadrado | null {
     const atual = this.blocosFor(dia, horario);
-    if (!atual.length || this.isFimDeSemana(dia)) return null;
+    if (!atual.length) return null;
     if (posicao === 'BA') {
       if (atual[atual.length - 1].aId !== bloco.aId) return null;
       const prox = this.proximoHorario(horario);
@@ -2094,8 +2316,9 @@ export class Grade implements OnInit, OnDestroy {
       const totalLivreSec = this.multiBlocoFreeTime(ep);
       const topSec = Math.floor(totalLivreSec / 2);
       const bottomSec = Math.ceil(totalLivreSec / 2);
-      const slotIdx = this.slotIndex(diaNome, slotStr);
-      const slots = this.slotsForEpisode(ep);
+      const wk = this.isFimDeSemana(diaNome) ? this.posicaoWeekend(bloco, diaNome) : null;
+      const slotIdx = wk ? wk.pos : this.slotIndex(diaNome, slotStr);
+      const slots = wk ? wk.total : this.slotsForEpisode(ep);
       if (slotIdx === 0) {
         topFreeMin = topSec / 60;
         episodeSliceMin = 30 - topFreeMin;
@@ -2456,9 +2679,21 @@ export class Grade implements OnInit, OnDestroy {
     });
     if (mesmoDiaSameEp) return 'Reprise';
 
+    // O histórico guarda, por programa, a primeira célula (página*7+dia) em
+    // que cada episódio apareceu de verdade — montado no computeSlipCascade
+    // com o mesmo índice do display. O teste antigo (posição sem módulo da
+    // sequência) criava Reprise falso: o deslize acumulado passava do tamanho
+    // da lista sem o episódio ter sido exibido ainda (Yu-Gi-Oh/Naruto nas
+    // páginas 45/46), e voltava atrás quando o deslize caía (falso Inédito).
+    if (epThis) {
+      const primeira = this.repriseHist.get(programaId)?.get(epThis.aId);
+      if (primeira !== undefined && primeira < this.currentPage() * 7 + diaIdx) return 'Reprise';
+      return original || 'Inédito';
+    }
+
     const step = this.pageStep(programaId);
-    // O bloco consome os episódios que exibe: a posição (sem módulo) diz se a
-    // sequência já deu a volta na lista — aí o episódio já foi exibido antes.
+    // Fallback (sem episódio resolvido): a posição sem módulo diz se a
+    // sequência já deu a volta na lista.
     const offsetAtual = offsetSlot(`ep-${programaId}`, eps, this.currentPage(), dayPosition, step);
     if (offsetAtual >= eps.length) return 'Reprise';
 

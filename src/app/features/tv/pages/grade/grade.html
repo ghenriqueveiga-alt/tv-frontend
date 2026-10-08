@@ -1,16 +1,22 @@
-<div class="min-h-screen grade-root" style="background: #f8fafc;">
+<div class="min-h-screen grade-root"
+     [style.--g-bg]="tema().bg"
+     [style.--g-surface]="tema().surface"
+     [style.--g-border]="tema().border"
+     [style.--g-text]="tema().text"
+     [style.--g-accent]="tema().accent"
+     [style.--g-now]="tema().now">
 
   <!-- Header -->
-  <div style="background: #fff; border-bottom: 1px solid #e2e8f0;"
+  <div style="background: var(--g-surface); border-bottom: 1px solid var(--g-border);"
        class="grade-header px-6 py-4 flex items-center gap-4">
     <div class="flex items-center gap-3">
-      <div style="background: #0f172a;"
+      <div style="background: var(--g-accent);"
            class="w-9 h-9 rounded-xl flex items-center justify-center">
         <span class="text-lg">📋</span>
       </div>
       <div>
-        <h1 class="text-base font-semibold tracking-tight" style="color: #0f172a;">Grade de Programação</h1>
-        <p class="text-[10px] mt-0.5" style="color: #94a3b8;">Programação semanal</p>
+        <h1 class="text-base font-semibold tracking-tight" style="color: var(--g-text);">Grade de Programação</h1>
+        <p class="text-[10px] mt-0.5" style="color: var(--g-text-muted);">Programação semanal</p>
       </div>
       <div class="flex items-center gap-2 ml-2">
         <button (click)="linhaParaInicio()"
@@ -31,6 +37,39 @@
     <!-- Espaçador: mantém os links do fim do header encostados à direita -->
     <div class="flex-1"></div>
     <div class="flex items-center gap-3">
+      <div class="tema-wrap">
+        <button type="button" class="tema-btn" [class.ativo]="temaPainel()"
+                (click)="alternarPainelTema()" title="Estilo da grade"
+                [attr.aria-expanded]="temaPainel()" aria-label="Estilo da grade">🎨</button>
+        @if (temaPainel()) {
+          <div class="tema-painel" (click)="$event.stopPropagation()">
+            <div class="tema-titulo">Estilo da grade</div>
+            <div class="tema-chips">
+              @for (t of temas; track t.id) {
+                <button type="button" class="tema-chip"
+                        [class.active]="temaId() === t.id && !temaCustom()"
+                        [attr.title]="t.nome"
+                        (click)="escolherTema(t.id)">
+                  <span class="tema-dot" [style.background]="t.cores.surface"></span>
+                  <span class="tema-dot" [style.background]="t.cores.accent"></span>
+                  {{ t.nome }}
+                </button>
+              }
+            </div>
+            <div class="tema-campos">
+              @for (campo of camposTema; track campo.chave) {
+                <label class="tema-campo">
+                  <span>{{ campo.nome }}</span>
+                  <input type="color" [value]="tema()[campo.chave]"
+                         [attr.aria-label]="campo.nome"
+                         (input)="aplicarCor(campo.chave, $any($event.target).value)" />
+                </label>
+              }
+            </div>
+            <button type="button" class="tema-reset" (click)="restaurarTema()">Restaurar padrão</button>
+          </div>
+        }
+      </div>
       <a routerLink="/tv/ao-vivo"
          class="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-all"
          style="background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.2); color: #fca5a5;">
@@ -51,7 +90,7 @@
 
   <!-- Pagination Tabs -->
   @if (totalPages() > 1) {
-    <div style="background: #fff; border-bottom: 1px solid #e2e8f0;" class="pag-barra">
+    <div style="background: var(--g-surface); border-bottom: 1px solid var(--g-border);" class="pag-barra">
       <span class="pag-tag">Episodios</span>
       <button
         class="pag-seta"
@@ -110,9 +149,9 @@
   @if (loading()) {
     <div class="p-20 text-center">
       <div class="inline-flex items-center gap-3 px-6 py-3 rounded-2xl"
-           style="background: #fff; border: 1px solid #e2e8f0;">
-        <div class="w-4 h-4 border-2 border-t-transparent rounded-full animate-spin" style="border-color: #0f172a;"></div>
-        <span class="text-sm font-medium" style="color: #64748b;">Carregando grade...</span>
+           style="background: var(--g-surface); border: 1px solid var(--g-border);">
+        <div class="w-4 h-4 border-2 border-t-transparent rounded-full animate-spin" style="border-color: var(--g-accent);"></div>
+        <span class="text-sm font-medium" style="color: var(--g-text-dim);">Carregando grade...</span>
       </div>
     </div>
   } @else {
@@ -120,13 +159,13 @@
       <div class="min-w-[960px] relative">
 
         <!-- Day Headers -->
-        <div class="grid grid-cols-[110px_repeat(7,minmax(0,1fr))] gap-2 mb-2" style="position: sticky; top: 0; z-index: 15; background: #f8fafc; padding-top: 2px; padding-bottom: 8px;">
+        <div class="grid grid-cols-[110px_repeat(7,minmax(0,1fr))] gap-2 mb-2" style="position: sticky; top: 0; z-index: 15; background: var(--g-bg); padding-top: 2px; padding-bottom: 8px;">
           <div class="flex items-end px-2 pb-2">
-            <span class="text-[10px] font-medium uppercase tracking-widest" style="color: #94a3b8;">Horário</span>
+            <span class="text-[10px] font-medium uppercase tracking-widest" style="color: var(--g-text-muted);">Horário</span>
           </div>
           @for (dia of diasAbrev; track dia; let i = $index) {
             <div class="day-header" [class.today]="isToday(dias[i])" (click)="linhaParaDia(i)" title="Mover a barra vermelha para {{ dias[i] }}" style="cursor: pointer;">
-              <span class="day-abbr" style="color: #0f172a;">{{ dia }}</span>
+              <span class="day-abbr" style="color: var(--g-text);">{{ dia }}</span>
               <div class="day-full">{{ dias[i] }}</div>
               @if (isToday(dias[i])) {
                 <div class="mt-1.5 mx-auto w-1.5 h-1.5 rounded-full bg-blue-500 shadow-lg"
@@ -138,12 +177,6 @@
 
         <!-- Hour Rows -->
         @for (horario of horarios; track horario; let i = $index) {
-          @if (showFaixaHeader(horario, i)) {
-            <div class="faixa-header animate-fade-in">
-              <span class="text-xs font-semibold tracking-wide">{{ faixaNome(horario) }}</span>
-              <div class="flex-1 h-px ml-2" style="background: #e2e8f0;"></div>
-            </div>
-          }
           <div class="grid grid-cols-[110px_repeat(7,minmax(0,1fr))] gap-2 mb-2 relative mt-1" [attr.data-horario]="horario">
 
             <!-- Hour Label -->
@@ -156,11 +189,11 @@
               <div class="grid-cell">
                 @if (gapResumo(dia, horario); as gap) {
                   <!-- Soma dos tempos livres, por cima do "Livre" de baixo do episódio de cima
-                       e do "Livre" de cima do de baixo (só dias úteis, entre dois episódios).
+                       e do "Livre" de cima do de baixo (entre dois episódios).
                        Este card é o que recebe o modal de propaganda do intervalo — mostra as
                        propagandas salvas (📢) com a SOMA das durações e, nos parênteses, o
                        tempo livre restante dividido em 2. -->
-                  <div class="gap-bloco absolute left-9 right-10 top-[calc(100%_-_21px)] z-[5] flex items-center justify-center gap-1.5 rounded-md border border-dashed border-gray-300 bg-gray-100 font-mono text-[10px] text-gray-500" [style.height.px]="gapAltura(horario)" [attr.title]="gap.titulo" (click)="abrirGapPropagandas(dia, horario)">
+                  <div class="gap-bloco absolute left-9 right-10 top-[calc(100%_-_21px)] z-[5] flex items-center justify-center gap-1.5 rounded-md font-mono text-[10px]" [style.height.px]="gapAltura()" [attr.title]="gap.titulo" (click)="abrirGapPropagandas(dia, horario)">
                     @if (gap.qtd > 0) {
                       <span class="prop-marca">📢 {{ gap.qtd }}</span>
                     }
@@ -181,6 +214,7 @@
                   @let progNome = getDisplayPrograma(bloco, dia)?.aNome ?? bloco.aPrograma?.aNome;
                   @let livreTO = infoTempoLivre(dia, horario, bloco, 'TO');
                   @let livreBA = infoTempoLivre(dia, horario, bloco, 'BA');
+                  @let semDur = blocoSemDuracao(bloco, dia);
                   <div class="tempo-livre"
                        [class.livre-ativo]="livreTO.ativo"
                        [attr.title]="livreTO.titulo"
@@ -192,7 +226,10 @@
                     <span class="font-mono">{{ livreTO.texto }}</span>
                   </div>
                        <div class="bloco-card"
+                       [class.bloco-sem-duracao]="semDur"
                        [attr.data-bloco-id]="bloco.aId"
+                       [attr.data-sem-duracao]="semDur ? '1' : null"
+                       [attr.title]="semDur ? tituloSemDuracao(bloco, dia) : null"
                        [attr.data-tipo]="tipo.includes('Inédito') ? 'inedito' : tipo.includes('Rep') ? 'reprise' : tipo.includes('Maratona') ? 'maratona' : tipo.includes('Especial') ? 'especial' : 'default'"
                        (click)="selectBloco(bloco, dia, horario)">
                     <!-- Card body -->
@@ -230,7 +267,7 @@
                             <div class="bloco-ep-row flex items-center gap-1.5 whitespace-nowrap">
                               <span [innerHTML]="formatTxExPx(ep)" class="font-mono text-[10px] whitespace-nowrap"></span>
                               @if (ep.aTitulo) {
-                                <span class="text-[10px] leading-tight truncate" style="color: #64748b;">{{ ep.aTitulo }}</span>
+                                <span class="text-[10px] leading-tight truncate" style="color: var(--g-text-dim);">{{ ep.aTitulo }}</span>
                               }
                             </div>
                             <!-- Meta row -->
@@ -243,8 +280,16 @@
                                     [class.badge-default]="!tipo.includes('Inédito') && !tipo.includes('Rep') && !tipo.includes('Maratona') && !tipo.includes('Especial')">
                                 {{ tipo }}
                               </span>
-                              @if (ep.aDuracao) {
-                                <span class="inline-flex items-center gap-0.5 text-[9px] font-mono" style="color: #94a3b8;">
+                              @if (duracaoInvalida(ep.aDuracao)) {
+                                <span class="dur-invalida inline-flex items-center gap-0.5 text-[9px] font-mono"
+                                      title="Duração ausente ou zerada no banco — o empacotamento do bloco para aqui">
+                                  <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                                  </svg>
+                                  {{ formatDuracao(ep.aDuracao) }}
+                                </span>
+                              } @else {
+                                <span class="inline-flex items-center gap-0.5 text-[9px] font-mono" style="color: var(--g-text-muted);">
                                   <svg class="w-2.5 h-2.5 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
                                   </svg>
@@ -259,7 +304,7 @@
                              episódios sequenciais que somam menos de 30 min. -->
                         <div class="flex items-center gap-1.5 mb-[3px] min-w-0">
                           <span class="text-[11px] font-semibold leading-[13px] truncate"
-                                style="color:#0f172a;"
+                                style="color:var(--g-text);"
                                 [attr.title]="progNome">{{ progNome }}</span>
                           <!-- Tipo do bloco como ponto colorido (mesmas cores do
                                badge do bloco único): em bloco multiepisódio o
@@ -272,6 +317,10 @@
                                 [class.badge-maratona]="tipo.includes('Maratona')"
                                 [class.badge-especial]="tipo.includes('Especial')"
                                 [class.badge-default]="!tipo.includes('Inédito') && !tipo.includes('Rep') && !tipo.includes('Maratona') && !tipo.includes('Especial')"></span>
+                                @if (semDur) {
+                                  <span class="dur-invalida ml-0.5 shrink-0 text-[9px] leading-none"
+                                        [attr.title]="tituloSemDuracao(bloco, dia)">⚠</span>
+                                }
                         </div>
                         <div class="flex min-w-0" style="gap: 6px;">
                           @for (coluna of colunasPacote(eps); track $index) {
@@ -280,9 +329,9 @@
                                 <div class="flex items-baseline gap-1.5 min-w-0" [style.height.px]="alturaLinhaPacote(eps.length)" [style.line-height.px]="alturaLinhaPacote(eps.length)">
                                   <span class="font-mono text-[10px] font-bold shrink-0" style="color:#60a5fa;">{{ epCodigo(ep) }}</span>
                                   @if (eps.length <= 5 && tituloCurto(ep)) {
-                                    <span class="text-[9px] truncate min-w-0" style="color:#64748b;">{{ tituloCurto(ep) }}</span>
+                                     <span class="text-[9px] truncate min-w-0" style="color:var(--g-text-dim);">{{ tituloCurto(ep) }}</span>
                                   }
-                                  <span class="font-mono text-[9px] shrink-0 ml-auto" style="color:#94a3b8;">{{ formatDuracao(ep.aDuracao) }}</span>
+                                   <span class="font-mono text-[9px] shrink-0 ml-auto" style="color:var(--g-text-muted);" [class.dur-invalida]="duracaoInvalida(ep.aDuracao)" [attr.title]="duracaoInvalida(ep.aDuracao) ? 'Duração ausente ou zerada no banco — o empacotamento do bloco para aqui' : null">{{ formatDuracao(ep.aDuracao) }}</span>
                                 </div>
                               }
                             </div>
@@ -488,6 +537,7 @@
           }
 
           @if (detailEpisodio()) {
+            @let semDurDet = blocoSemDuracao(detailBloco()!, detailDia());
             <div class="detail-info-box space-y-1.5">
               <div class="flex items-center gap-2 flex-wrap">
                 <span [innerHTML]="formatTxExPx(detailEpisodio()!)" class="font-mono text-xs whitespace-nowrap"></span>
@@ -495,7 +545,17 @@
                   <span class="text-xs text-gray-400">{{ detailEpisodio()!.aTitulo }}</span>
                 }
               </div>
-              @if (detailEpisodio()!.aDuracao) {
+              @if (semDurDet) {
+                <p class="text-[11px] flex items-center gap-1.5 dur-invalida"
+                   [attr.title]="tituloSemDuracao(detailBloco()!, detailDia())">
+                  <span>⚠</span>
+                  @if (qtdEpisodiosBloco() > 1) {
+                    {{ qtdEpisodiosBloco() }} episódios · Total: {{ getDuracaoBloco() }} (há sem duração)
+                  } @else {
+                    Duração: ausente/zerada no banco
+                  }
+                </p>
+              } @else if (detailEpisodio()!.aDuracao) {
                 <p class="text-[11px] text-gray-500 flex items-center gap-1.5">
                   <span>⏱</span>
                   @if (qtdEpisodiosBloco() > 1) {

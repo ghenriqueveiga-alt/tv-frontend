@@ -3,7 +3,9 @@ import { environment } from '../../../environments/environment';
 
 @Injectable({ providedIn: 'root' })
 export class ServerTimeService {
-  private readonly offsetMs = (environment.timezoneOffsetHours ?? 0) * 3600000;
+  private readonly localOffsetHours = -new Date().getTimezoneOffset() / 60;
+  private readonly offsetMs =
+    ((environment.timezoneOffsetHours ?? 0) - this.localOffsetHours) * 3600000;
   readonly ready = signal(true);
 
   now(): Date {

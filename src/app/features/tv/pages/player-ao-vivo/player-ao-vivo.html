@@ -113,6 +113,11 @@
               #videoPlayer
               [src]="videoUrl()"
               (loadeddata)="onVideoLoaded()"
+              (loadstart)="videoLoading.set(true)"
+              (waiting)="videoLoading.set(true)"
+              (stalled)="videoLoading.set(true)"
+              (canplay)="videoLoading.set(false)"
+              (playing)="videoLoading.set(false); videoError.set(null)"
               (seeking)="onSeeking()"
               (play)="onPlayState(true)"
               (pause)="onPauseBlocked()"
@@ -122,6 +127,19 @@
               playsinline
               class="tv-video">
             </video>
+
+            @if (videoLoading() && !videoError()) {
+              <div class="tv-center tv-overlay">
+                <span class="text-5xl block mb-2">📡</span>
+                <p class="text-gray-400">Carregando vídeo...</p>
+              </div>
+            } @else if (videoError()) {
+              <div class="tv-center tv-overlay">
+                <span class="text-5xl block mb-2">⚠️</span>
+                <p class="text-yellow-400">{{ videoError() }}</p>
+                <p class="text-xs text-gray-500 mt-1">tentando reconectar…</p>
+              </div>
+            }
           }
 
           @if (freeGapActive) {
